@@ -2,6 +2,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Domains/BlueprintGraph/Code/McpGraphCodeEmit.h"
 #include "Domains/BlueprintGraph/McpBPGraphBatchSteps.h"
 #include "EdGraph/EdGraph.h"
 #include "Foundation/GraphLayout/McpGraphNodeExtent.h"
@@ -122,7 +123,8 @@ bool FTranspiler::Body(const FSExpr& Form, UEdGraphNode* InEntry)
     return Stmts(Form.Items, Start, Bindings, Flow);
 }
 
-// A return node is matched by class: the menu calls it Add Return Node..., the node itself Return Node.
+// A return node is matched by class: the menu calls it Add Return Node..., the node itself Return Node. An operator by
+// its symbol: (- a b) asks for Utilities|Operators|Subtract, while the node it was read from is Math|Float|float-float.
 UEdGraphNode* FTranspiler::Reuse(const FString& TypeId)
 {
     if (StatementTag.IsEmpty())
@@ -130,12 +132,15 @@ UEdGraphNode* FTranspiler::Reuse(const FString& TypeId)
         return nullptr;
     }
     const FString Prefix = StatementTag.Mid(1).ToLower();
+    const TCHAR* Operator = Emit::OperatorFor(TypeId);
     UEdGraphNode* Found = nullptr;
     for (UEdGraphNode* Node : Reusable)
     {
         const UK2Node* K2 = Cast<UK2Node>(Node);
+        const TCHAR* NodeOperator = K2 && Operator ? Emit::OperatorFor(TypeIdOf(K2)) : nullptr;
         const bool bKind = K2 && (K2->IsA<UK2Node_FunctionResult>() ? TypeId == TEXT("|AddReturnNode...")
-                                                                    : MenuTitleKey(TypeIdOf(K2)) == MenuTitleKey(TypeId));
+                                  : NodeOperator                     ? FCString::Strcmp(NodeOperator, Operator) == 0
+                                                                     : MenuTitleKey(TypeIdOf(K2)) == MenuTitleKey(TypeId));
         if (bKind && Node->NodeGuid.ToString().ToLower().StartsWith(Prefix))
         {
             Found = Node;
