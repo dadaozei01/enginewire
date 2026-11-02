@@ -3,6 +3,7 @@
 #include "BlueprintVariableNodeSpawner.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
+#include "Editor/EditorEngine.h"
 #include "Engine/Blueprint.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CustomEvent.h"
@@ -14,6 +15,7 @@
 #include "K2Node_Self.h"
 #include "K2Node_Switch.h"
 #include "K2Node_Variable.h"
+#include "Settings/EditorStyleSettings.h"
 
 namespace McpGraphCode
 {
@@ -30,6 +32,29 @@ FString WithoutWhitespace(const FString& Text)
         }
     }
     return Out;
+}
+
+// A variable's menu entry is titled with its friendly name when the editor shows friendly names (BPC_切割组件 is
+// listed as Get BPC 切割组件), while the node titles itself with the raw name, so an underscore kept the two apart:
+// the read found no menu entry, printed |GetBPC_切割组件, and the write could not make it. Get and Set titles take
+// the menu's form; other titles (Set with Notify ...) stay as the node gives them.
+FString VariableMenuTitle(const UK2Node* Node, const FString& Title)
+{
+    const UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node);
+    const FProperty* Property = Variable ? Variable->GetPropertyForVariable() : nullptr;
+    if (!Property || !GetDefault<UEditorStyleSettings>()->bShowFriendlyNames)
+    {
+        return Title;
+    }
+    const FString Raw = WithoutWhitespace(Variable->GetVarNameString());
+    for (const TCHAR* Verb : {TEXT("Get"), TEXT("Set")})
+    {
+        if (Title.Equals(Verb + Raw, ESearchCase::CaseSensitive))
+        {
+            return Verb + WithoutWhitespace(UEditorEngine::GetFriendlyName(Property));
+        }
+    }
+    return Title;
 }
 
 EKind KindOf(const UK2Node* Node)
@@ -81,7 +106,7 @@ using namespace SnapshotParts;
 // Epic's _get_node_type_id: menu category and list title, whitespace removed; a custom event is AddEvent|Custom|Name.
 FString TypeIdOf(const UK2Node* Node)
 {
-    const FString Title = WithoutWhitespace(SourceText(Node->GetNodeTitle(ENodeTitleType::ListView)));
+    const FString Title = VariableMenuTitle(Node, WithoutWhitespace(SourceText(Node->GetNodeTitle(ENodeTitleType::ListView))));
     return Node->IsA<UK2Node_CustomEvent>() ? TEXT("AddEvent|Custom|") + Title
                                             : WithoutWhitespace(CategoryText(Node->GetMenuCategory())) + TEXT("|") + Title;
 }

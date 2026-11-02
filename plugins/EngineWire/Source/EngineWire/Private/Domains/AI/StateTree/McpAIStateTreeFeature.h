@@ -17,6 +17,7 @@
 #include "StateTreeEditingSubsystem.h"
 #else
 #include "CoreGlobals.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTLS.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "StateTreeDelegates.h"
@@ -142,13 +143,30 @@ inline bool McpCompileStateTree(UStateTree* Tree, TArray<FString>& OutMessages)
         }
     };
     FModuleManager::Get().LoadModule(TEXT("StateTreeEditorModule"));
-    if (!UE::StateTree::Delegates::OnRequestCompile.IsBound())
+#if PLATFORM_WINDOWS
+    // StateTreeModule is delay-loaded, and MSVC cannot delay-load a DLL that data is imported from (LNK1194), so on
+    // Windows the delegate is looked up by its exported name in the module the editor already loaded.
+    UE::StateTree::Delegates::FOnRequestCompile* OnRequestCompile = nullptr;
+    FModuleStatus Status;
+    if (FModuleManager::Get().QueryModule(TEXT("StateTreeModule"), Status) && Status.bIsLoaded)
+    {
+        if (void* Dll = FPlatformProcess::GetDllHandle(*Status.FilePath))
+        {
+            OnRequestCompile = static_cast<UE::StateTree::Delegates::FOnRequestCompile*>(FPlatformProcess::GetDllExport(Dll,
+                TEXT("?OnRequestCompile@Delegates@StateTree@UE@@3V?$TDelegate@$$A6A_NAEAVUStateTree@@@ZUFDefaultDelegateUserPolicy@@@@A")));
+            FPlatformProcess::FreeDllHandle(Dll);
+        }
+    }
+#else
+    UE::StateTree::Delegates::FOnRequestCompile* OnRequestCompile = &UE::StateTree::Delegates::OnRequestCompile;
+#endif
+    if (!OnRequestCompile || !OnRequestCompile->IsBound())
     {
         OutMessages.Add(TEXT("The StateTree editor module is not loaded, so the tree was not compiled."));
         return false;
     }
     FCapture Capture(OutMessages);
-    return UE::StateTree::Delegates::OnRequestCompile.Execute(*Tree);
+    return OnRequestCompile->Execute(*Tree);
 #endif
 }
 
