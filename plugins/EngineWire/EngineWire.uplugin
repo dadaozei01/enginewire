@@ -213,13 +213,11 @@
     },
     {
       "Name": "MovieRenderPipeline",
-      "Enabled": true,
-      "Optional": true
+      "Enabled": true
     },
     {
       "Name": "MoviePipelineMaskRenderPass",
-      "Enabled": true,
-      "Optional": true
+      "Enabled": true
     },
     {
       "Name": "Takes",
@@ -248,5 +246,5 @@
     }
   ],
   "Installed": true,
-  "EngineVersion": "5.4.0"
+  "EngineVersion": "5.8.0"
 }

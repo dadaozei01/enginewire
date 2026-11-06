@@ -7,6 +7,7 @@
 #include "BlueprintNodeSpawner.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
+#include "Misc/EngineVersionComparison.h"
 #include "UObject/UnrealType.h"
 
 namespace McpGraphCode
@@ -46,7 +47,12 @@ const TMap<FString, FString>& CommonSegments()
         {
             const FString Source = Key.Value;
             FText Shown;
-            if (FText::FindText(TEXT("EditorCategoryUtils"), Key.Key, Shown, &Source) && !Shown.ToString().Equals(Source))
+#if ENGINE_MAJOR_VERSION > 5 || ENGINE_MINOR_VERSION >= 5
+            const bool bFound = FText::FindTextInLiveTable_Advanced(TEXT("EditorCategoryUtils"), Key.Key, Shown, &Source);
+#else
+            const bool bFound = FText::FindText(TEXT("EditorCategoryUtils"), Key.Key, Shown, &Source);
+#endif
+            if (bFound && !Shown.ToString().Equals(Source))
             {
                 Out.Add(Shown.ToString().TrimStartAndEnd(), Source);
             }
