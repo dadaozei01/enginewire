@@ -9,6 +9,7 @@
 #include "Foundation/HandlerUtils/McpHandlerUtilsTransforms.h"
 #include "Safety/McpSafeOperations.h"
 
+#include "ComponentRecreateRenderStateContext.h"
 #include "Editor.h"
 #include "GameFramework/Actor.h"
 #include "GeometryCollection/GeometryCollection.h"
@@ -17,6 +18,7 @@
 #include "GeometryCollection/GeometryCollectionComponent.h"
 #include "GeometryCollection/GeometryCollectionObject.h"
 #include "Interfaces/IPluginManager.h"
+#include "RenderingThread.h"
 #include "UObject/UObjectIterator.h"
 #endif
 
@@ -82,7 +84,7 @@ UGeometryCollection *ResolveCollection(FActionContext &Context, const TSharedPtr
     return Asset;
 }
 
-TArray<UGeometryCollectionComponent *> ComponentsUsing(const UGeometryCollection *Asset)
+TArray<UGeometryCollectionComponent *> ComponentsUsing(const UGeometryCollection *Asset, bool bEditorWorldOnly)
 {
     TArray<UGeometryCollectionComponent *> Users;
     for (TObjectIterator<UGeometryCollectionComponent> It(RF_ClassDefaultObject | RF_ArchetypeObject, true,
@@ -90,7 +92,7 @@ TArray<UGeometryCollectionComponent *> ComponentsUsing(const UGeometryCollection
          It; ++It)
     {
         const UWorld *World = It->GetWorld();
-        if (It->GetRestCollection() == Asset && World && World->WorldType == EWorldType::Editor)
+        if (It->GetRestCollection() == Asset && (!bEditorWorldOnly || (World && World->WorldType == EWorldType::Editor)))
         {
             Users.Add(*It);
         }
@@ -213,16 +215,28 @@ bool EditCollection(FActionContext &Context, UGeometryCollection *Asset, const T
         }
         Recorded.Add(User);
     }
+    const TArray<UGeometryCollectionComponent *> Components = ComponentsUsing(Asset, false);
     bool bChanged = false;
     {
         FMcpScopedEditorTransaction Transaction(FText::FromString(Title), EMcpMutationDurability::EditorStateOnly, Recorded);
+        // Thumbnail and preview components can retain the asset without any actor in the editor world.
+        // Retire their old proxies before changing transform counts, then recreate them after the asset rebuild.
+        TArray<FComponentRecreateRenderStateContext> RenderStates;
+        RenderStates.Reserve(Components.Num());
+        for (UGeometryCollectionComponent *Component : Components)
         {
-            // A component's edit scope drops its physics state before the change and, on leaving, recomputes what
-            // depends on the shape, invalidates the collection and resets every component that draws the asset.
+            RenderStates.Emplace(static_cast<UActorComponent *>(Component));
+        }
+        if (!RenderStates.IsEmpty())
+        {
+            FlushRenderingCommands();
+        }
+        {
+            // Reset the transform caches and physics state for all matching components, including previews.
             TOptional<FGeometryCollectionEdit> Edit;
-            if (Users.Num() > 0)
+            if (!Components.IsEmpty())
             {
-                Edit.Emplace(Users[0], GeometryCollection::EEditUpdate::RestPhysicsDynamic, !bShapeChanges, true);
+                Edit.Emplace(Components[0], GeometryCollection::EEditUpdate::RestPhysicsDynamic, !bShapeChanges, true);
             }
             const TSharedPtr<FGeometryCollection, ESPMode::ThreadSafe> Shared = Asset->GetGeometryCollection();
             bChanged = Shared.IsValid() && Mutate(*Shared);

@@ -25,7 +25,7 @@ bool RequireFracturePlugins(FActionContext &Context);
 UGeometryCollection *ResolveCollection(FActionContext &Context, const TSharedPtr<FJsonObject> &Payload);
 
 // Components in editor worlds that draw this asset (PIE copies are left alone).
-TArray<UGeometryCollectionComponent *> ComponentsUsing(const UGeometryCollection *Asset);
+TArray<UGeometryCollectionComponent *> ComponentsUsing(const UGeometryCollection *Asset, bool bEditorWorldOnly = true);
 
 // Leaf transforms that carry geometry: the pieces a fracture produced, and what Fracture Mode counts as bones at the
 // deepest level.
