@@ -56,4 +56,14 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
    Windows 实测：search「geometry collection」列出 5 个破碎命令。从 /Engine/BasicShapes/Sphere 新建 GC（1 块，960 三角形）；40 个 site、种子 7 切成 38 块；再切被 ALREADY_FRACTURED 拒绝；Auto Cluster 8 个一组得 9 个簇，层级 [1, 8, 38]，get_geometry_collection_info 读回一致；configure 阈值改为 [100, 50, 10] 后撤销，读回恢复为 [500000, 50000, 5000]。蓝图：BP_数值 的副本读出、原样写回、再读，文本一致，11 节点 10 连线不变，编译 0 错误。BP_转刀 的副本先是写回被拒（CODE_INVALID）：变量 Get/Set 节点以原名作标题（Get BPC_切割组件），菜单项按编辑器「显示友好名称」用友好名（Get BPC 切割组件），名字含下划线时读出找不到菜单项，打印为「|GetBPC_切割组件」，写回按 id 建不出。现读出时变量节点的 Get/Set 标题按菜单的写法生成（McpGraphCodeSnapshot.cpp）。修后又见写回时运算节点（- /）带 ; id 却被重建：(- a b) 请求的是 Utilities|Operators|Subtract，原节点是 Math|Float|float-float，标题比较不同；现按运算符号匹配复用（McpGraphCodeWriteForm.cpp）。两处修后，从原蓝图新复制的 BP_转刀 读出（108 节点 125 连线）原样写回，返回文本与写入完全一致，编译 0 错误 0 警告；与原图相比只少了两个转接点（Reroute），文本语法不表示转接点，写回时改为直连，只影响排版。
    已知限制（上游即有，本次未修）：转接点不保留；BPC_切割组件 读出时把非纯的 SphereTraceForObjects 内联进 BreakHitResult，Branch 的 else 接 DoOnce.Reset 在文本中未体现，写回时 MakeArray("ObjectTypeQuery6") 连不上 ObjectTypes（CODE_INVALID，未写入）。未做 PIE 落地测试。
 
+17. UE 5.8 适配与验证（2026-11-06）：Windows x64，UE 5.8.4，BuildId 55116800，MSVC 14.44.35229，Windows SDK 10.0.22621.0。[v0.6.0-ue58.1](https://github.com/dadaozei01/enginewire-ue54/releases/tag/v0.6.0-ue58.1) 为预发布，Latest 仍为 5.4。源码在 `build/ue58`，未合并到 `main`。该分支将 `EngineVersion` 设为 5.8.0，将 MovieRenderPipeline 和 MoviePipelineMaskRenderPass 设为必需依赖，并启用 UE 5.8 的 Chaos 破碎命令。分支描述符不能直接合并到 5.4 主分支。
+
+   已实测：插件加载、MCP 连接、引擎目录安装加载；中文编辑器下的蓝图文本读写和编译；打开资产；通过 `call_editor_tool` 调用官方工具集的一个只读工具；Geometry Collection 创建、Voronoi 切割、Auto Cluster、物理设置、切割和分组的撤销重做、保存、放置 Actor，以及 PIE 落地破碎。
+
+   切割或分组 Geometry Collection 时，缩略图预览组件曾因变换数据数量不一致触发渲染线程断言 `NumTransforms == Transforms.Num()`。5.8 预发布版已修复。修复尚未进入 `main` 或现有 5.4 版本。5.4 有同类风险，依据是源码，尚未实测。
+
+   其他写入功能首次使用后需检查结果。未验证关闭编辑器的稳定性、Fracture 和 PlanarCut 同时禁用时的启动情况。Mac 版未编译。
+
+   UE 5.8 官方实验性 MCP 默认使用端口 8000、路径 `/mcp`。每次启动编辑器需执行 `ModelContextProtocol.StartServer` 或开启自动启动。服务器代码没有鉴权。2026-11-06 单次中文编辑器实测中，`write_graph_dsl` 写入失败，`read_graph_dsl` 读回为空。英文界面未测，此结果仅限当次测试。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

@@ -32,3 +32,16 @@ UE 5.4 构建会带上 Chaos 破碎命令（UPSTREAM.md 第 16 项），需要�
 发布包保留 EngineWire.uplugin、Source、Config、Resources、上游 Content（如存在）、Binaries 下运行所需文件及许可证，排除 Intermediate、Saved、PDB、dSYM 和用户资产。ZIP 根目录应为 EngineWire，生成 SHA-256 校验。
 
 若 UAT 被引擎内无关插件规则阻断，先查日志定位，不删除其他插件；当前 Windows 发布的回退构建情况见 UPSTREAM.md。
+
+## UE 5.8（Windows x64）
+
+从 `build/ue58` 分支的仓库根目录运行。已验证环境为 UE 5.8.4（BuildId 55116800）、Visual Studio C++ 工具链 14.44.35229、Windows SDK 10.0.22621.0。MSVC 安装目录名可以是 `14.44.35207`，这次构建实际使用的工具链版本是 `14.44.35229`，不属于禁用版本。UE 5.8 的 Mac 包未编译。
+
+```powershell
+$ue58 = '<UE_5.8 安装目录>'
+$plugin = Join-Path (Get-Location).Path 'plugins/EngineWire/EngineWire.uplugin'
+$package = Join-Path (Get-Location).Path 'build-output/EngineWire-UE58-Win64'
+& (Join-Path $ue58 'Engine/Build/BatchFiles/RunUAT.bat') BuildPlugin "-Plugin=$plugin" "-Package=$package" -TargetPlatforms=Win64
+```
+
+每次构建使用新的输出目录。5.8 分支的描述符面向 UE 5.8，不能直接用于 5.4 主分支。
