@@ -46,10 +46,10 @@ public class EngineWire : ModuleRules {
         PublicDefinitions.Add(bHasSubdividePoly ? "MCP_HAS_SUBDIVIDE_POLY=1" : "MCP_HAS_SUBDIVIDE_POLY=0");
 
         // Geometry Collection create, Voronoi fracture and auto cluster call PlanarCut's CutMultipleWithPlanarCells and
-        // FractureEngine's AutoCluster, whose signatures were checked against UE 5.4 only. Other engines compile the
+        // FractureEngine's AutoCluster on UE 5.4 and 5.8. Other engines compile the
         // handlers out and refuse with NOT_SUPPORTED. The two plugin modules are delay-loaded like the ones above, and
         // the handlers check that the Fracture and PlanarCut plugins are enabled before calling into them.
-        bool bHasGcFracture = Target.Version.MajorVersion == 5 && Target.Version.MinorVersion == 4 &&
+        bool bHasGcFracture = Target.Version.MajorVersion == 5 && (Target.Version.MinorVersion == 4 || Target.Version.MinorVersion == 8) &&
             FindOptionalModule(EngineDir, "FractureEngine") && FindOptionalModule(EngineDir, "PlanarCut");
         if (bHasGcFracture) {
             PrivateDependencyModuleNames.AddRange(new string[] { "GeometryCollectionEngine", "Chaos", "Voronoi" });
