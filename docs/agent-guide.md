@@ -47,7 +47,7 @@
 
 ## Chaos 破碎（Geometry Collection）
 
-本仓库新增（UPSTREAM.md 第 16 项），在 animation_physics 下，search「geometry collection」「voronoi fracture」「破碎」可找到。只在 UE 5.4 构建中提供，其他版本返回 NOT_SUPPORTED；切割与分组需工程启用 Fracture、PlanarCut 插件。
+本仓库新增（UPSTREAM.md 第 16 项），在 animation_physics 下，search「geometry collection」「voronoi fracture」「破碎」可找到。UE 5.4 和 UE 5.8 发布版提供这些命令，其他版本返回 NOT_SUPPORTED；切割与分组需工程启用 Fracture、PlanarCut 插件。
 
 - create_geometry_collection：Fracture Mode 的 New。staticMeshPaths 一个或多个，name 默认 GC_<网格名>，path 默认网格所在目录；同名资产已存在时拒绝，不覆盖。spawnActor 可同时在关卡放 Actor（location、rotation、actorLabel、simulatePhysics）。
 - fracture_geometry_collection：Uniform Voronoi（siteCount，可选 siteCountMax）或 Custom Voronoi（sites，资产空间坐标）；randomSeed（-1 随机并在回执返回）、chanceToFracture、groupFracture（默认 true）、grout、noise*、collisionSampleSpacing、boneIndices。已切过的 GC 默认拒绝（ALREADY_FRACTURED），预估碎块超过 maxPieces（默认 2000）拒绝（TOO_MANY_PIECES），都在切之前判断。要重切就新建一个 GC，不要对已切的再切。
