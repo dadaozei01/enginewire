@@ -15,8 +15,10 @@ function listeningPid(port) {
       if (cols.length >= 5 && /LISTEN/i.test(cols[3]) && cols[1].endsWith(':' + port)) return Number(cols[4]);
     }
   } else {
-    const pid = run('lsof', ['-nP', '-iTCP:' + port, '-sTCP:LISTEN', '-t']).trim().split(/\s+/)[0];
-    if (pid) return Number(pid);
+    const pids = run('lsof', ['-nP', '-iTCP:' + port, '-sTCP:LISTEN', '-t']).trim().split(/\s+/).filter(Boolean);
+    // SO_REUSEPORT lets editors share the port, and the newest gets the connections.
+    if (pids.length > 1) throw new Error(pids.length + ' editors are listening on port ' + port + '; close all but one');
+    if (pids[0]) return Number(pids[0]);
   }
   throw new Error('Nothing is listening on port ' + port);
 }
@@ -42,12 +44,34 @@ function projectFromCommandLine(cmdline) {
   return m[1] || m[2];
 }
 
+// A Finder launch on Mac has no .uproject on the command line, but the editor holds the project's own modules open.
+function projectFromOpenFiles(pid) {
+  const projects = new Set();
+  const seen = new Set();
+  for (const line of run('lsof', ['-p', String(pid), '-Fn']).split('\n')) {
+    let folder = line.startsWith('n/') ? path.dirname(line.slice(1)) : '';
+    while (folder && folder !== '/' && !seen.has(folder)) {
+      seen.add(folder);
+      let found = [];
+      try {
+        found = fs.readdirSync(folder).filter((f) => f.toLowerCase().endsWith('.uproject'));
+      } catch { /* an open file's folder may be unreadable */ }
+      if (found.length === 1) projects.add(path.join(folder, found[0]));
+      folder = path.dirname(folder);
+    }
+  }
+  if (projects.size !== 1) throw new Error('Cannot tell the open project from the editor (' + projects.size + ' candidates); pass the .uproject path');
+  return [...projects][0];
+}
+
 // With no project given, use the UnrealEditor that is listening on the MCP port,
 // so the token always matches whichever project is open.
 function autoProject() {
   const url = new URL(process.env.CLAUDE_CODE_MCP_SERVER_URL || process.env.UE_MCP_URL || 'http://127.0.0.1:3000/mcp');
-  const { name, cmdline } = processInfo(listeningPid(url.port || 80));
+  const pid = listeningPid(url.port || 80);
+  const { name, cmdline } = processInfo(pid);
   if (!/^UnrealEditor/i.test(name)) throw new Error('Port owner is not UnrealEditor');
+  if (process.platform === 'darwin' && !/\.uproject/i.test(cmdline)) return projectFromOpenFiles(pid);
   return projectFromCommandLine(cmdline);
 }
 

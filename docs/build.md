@@ -33,9 +33,19 @@ UE 5.4 构建会带上 Chaos 破碎命令（UPSTREAM.md 第 16 项），需要�
 
 若 UAT 被引擎内无关插件规则阻断，先查日志定位，不删除其他插件；当前 Windows 发布的回退构建情况见 UPSTREAM.md。
 
+## UE 5.8（Mac）
+
+从 `build/ue58-mac` 分支运行。`scripts/build-ue58-mac.sh --check-only` 只做检查，不带参数则完成编译并检查产物。脚本不会修改引擎或 Xcode 配置，也不会安装插件。
+
+已验证环境为 Apple Silicon、macOS 27.0.1、UE 5.8.4、Xcode 27.0。UE 5.8.4 自带的 `Apple_SDK.json` 上限为 27.9.0，VerifySdk 为 Valid，不需要改配置。Epic 文档推荐 Xcode 26.1.1，并写明 26.4 不兼容，Xcode 27 不在其推荐范围内。
+
+BuildPlugin 产出 Universal 包。工程目录安装后编译工程，`Plugins/EngineWire` 里的 dylib 会被重新生成，大小约为一半，发布时要用 BuildPlugin 的输出。
+
+从 5.4 复制的 C++ 工程要把 Target 文件改为 `BuildSettingsVersion.V7` 和 `EngineIncludeOrderVersion.Unreal5_8`，否则 UBT 因修改共享编译环境而失败。
+
 ## UE 5.8（Windows x64）
 
-从 `build/ue58` 分支的仓库根目录运行。已验证环境为 UE 5.8.4（BuildId 55116800）、Visual Studio C++ 工具链 14.44.35229、Windows SDK 10.0.22621.0。MSVC 安装目录名可以是 `14.44.35207`，这次构建实际使用的工具链版本是 `14.44.35229`，不属于禁用版本。UE 5.8 的 Mac 包未编译。
+从 `build/ue58` 分支的仓库根目录运行。已验证环境为 UE 5.8.4（BuildId 55116800）、Visual Studio C++ 工具链 14.44.35229、Windows SDK 10.0.22621.0。MSVC 安装目录名可以是 `14.44.35207`，这次构建实际使用的工具链版本是 `14.44.35229`，不属于禁用版本。Mac 编译见上一节。
 
 ```powershell
 $ue58 = '<UE_5.8 安装目录>'

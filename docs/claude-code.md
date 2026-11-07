@@ -44,10 +44,11 @@ $cfg = [ordered]@{ type = 'http'; url = 'http://127.0.0.1:3000/mcp'; headersHelp
 
 ### 自动识别的限制
 
-- 编辑器命令行里必须带 .uproject。从 Epic 启动器、双击 .uproject 或命令行打开工程都会带；只开项目浏览器、尚未选工程时不行。
-- 同时开多个编辑器时，只有先占到 3000 端口的那个能连上，helper 也只认它。
+- Windows：编辑器命令行里必须带 .uproject。从 Epic 启动器、双击 .uproject 或命令行打开工程都会带；只开项目浏览器、尚未选工程时不行。
+- Mac：在 Finder 双击 .uproject 时命令行不带工程路径，helper 改从编辑器打开的文件反推工程，所以工程要有自己的模块或工程目录下的插件。纯蓝图工程配引擎目录插件时可能认不出，此时在 helper 后面写上 .uproject 路径。
+- 同时开多个编辑器时不要依赖自动识别。Mac（UE 5.8.4 + 5.4.4）实测两个编辑器都能监听 3000，所有连接都进后打开的那个；令牌不匹配时返回 401。helper 发现多个监听者会直接报错。Windows 的行为未重新验证。
 - Claude Code 在会话开始或 /mcp 重连时调用 helper。换工程后要新开会话或执行 /mcp 重连，才会读到新工程的令牌。
-- Windows 自动识别已实测（含中文路径）；Mac 用 lsof 与 ps 查找，尚未在 Mac 上实测。
+- Windows 自动识别已实测（含中文路径）。Mac（UE 5.8.4）已实测 Finder 双击打开、工程带 C++ 模块的情况，Python 和 Node helper 都读到正确令牌；命令行打开时命令行带工程路径，这条路径未单独运行 helper。
 
 ## 作用域
 

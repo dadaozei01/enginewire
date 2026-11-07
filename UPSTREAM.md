@@ -62,8 +62,20 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    切割或分组 Geometry Collection 时，缩略图预览组件曾因变换数据数量不一致触发渲染线程断言 `NumTransforms == Transforms.Num()`。5.8 预发布版已修复。修复尚未进入 `main` 或现有 5.4 版本。5.4 有同类风险，依据是源码，尚未实测。
 
-   其他写入功能首次使用后需检查结果。未验证关闭编辑器的稳定性、Fracture 和 PlanarCut 同时禁用时的启动情况。Mac 版未编译。
+   其他写入功能首次使用后需检查结果。未验证关闭编辑器的稳定性、Fracture 和 PlanarCut 同时禁用时的启动情况。Mac 结果见第 18 项。
 
    UE 5.8 官方实验性 MCP 默认使用端口 8000、路径 `/mcp`。每次启动编辑器需执行 `ModelContextProtocol.StartServer` 或开启自动启动。服务器代码没有鉴权。2026-11-06 单次中文编辑器实测中，`write_graph_dsl` 写入失败，`read_graph_dsl` 读回为空。英文界面未测，此结果仅限当次测试。
+
+18. UE 5.8 Mac 验证（2026-11-07）：Apple M1 Max，macOS 27.0.1，UE 5.8.4，BuildId 55116800，Xcode 27.0（Apple clang 21），基于 `build/ue58` c6505b6，插件代码未改动。BuildPlugin 约 4 分钟，三个 dylib 均为 Universal，134 条警告全部是 `-Wdeprecated-declarations`。逐项记录见 docs/ue58-mac-test-plan.md。
+
+   已实测（工程目录安装）：插件加载和 MCP 连接；中文蓝图文本写入、往返和编译；复制蓝图、删节点、删函数；材质批量建图和材质实例；Niagara 创建及 PIE 中可见；Python（arm64）；生成 Actor、PIE 和截图；Geometry Collection 创建、40 site 种子 7 切成 38 块、Auto Cluster 得 [1, 8, 38]（均与 Windows 一致）、撤销重做、物理设置、重启后读回、PIE 落地破碎；连接 MCP 时退出编辑器 3 次，均正常结束。
+
+   本轮修复：Mac 上在 Finder 双击 `.uproject` 时命令行不带工程路径，helper 自动识别失败。helper 改为从编辑器打开的文件反推工程，Python 和 Node 版都读到正确令牌。纯蓝图工程配引擎目录插件时可能认不出，未实测。
+
+   已知问题（插件未改）：`McpNativeTransportRunLoop.cpp` 的 `SetReuseAddr(true)` 在 Mac 上同时设置 `SO_REUSEPORT`，所以两个编辑器都能监听 3000，且日志都显示启动成功。5.8 先开、5.4 后开时，6 次请求全部进入 5.4，5.8 令牌返回 401。不同工程令牌不同，请求会被拒绝；同一工程开两个编辑器时令牌相同，请求可能进入另一个编辑器（未实测）。helper 和 `scripts/mcp-smoke.py` 发现多个监听者时报错，但其他客户端不受此保护。5.4 代码相同，未单独评估；Windows 行为未验证。
+
+   小问题：截图默认目录在 Mac 上也是 `Saved/Screenshots/WindowsEditor`，路径写死在源码里。
+
+   未验证：编辑器目录安装；Fracture 和 PlanarCut 真正缺失时的启动。在 `.uproject` 中禁用后，ChaosEditor 等引擎插件的必需依赖仍会挂载它们；dylib 直接链接这两个模块。内容浏览器缩略图打开时切割也未专门测试。其他写入功能首次使用后需检查结果。
 
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

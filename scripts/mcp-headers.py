@@ -21,6 +21,8 @@ def listening_pid(port):
                 return int(cols[4])
     else:
         pids = run(['lsof', '-nP', '-iTCP:%d' % port, '-sTCP:LISTEN', '-t']).split()
+        if len(pids) > 1:  # SO_REUSEPORT lets editors share the port, and the newest gets the connections
+            raise RuntimeError('%d editors are listening on port %d; close all but one' % (len(pids), port))
         if pids:
             return int(pids[0])
     raise RuntimeError('Nothing is listening on port %d' % port)
@@ -47,12 +49,34 @@ def project_from_command_line(cmdline):
     return m.group(1) or m.group(2)
 
 
+def project_from_open_files(pid):
+    """A Finder launch on Mac has no .uproject on the command line, but the editor holds the project's own modules open."""
+    projects, seen = set(), set()
+    for line in run(['lsof', '-p', str(pid), '-Fn']).splitlines():
+        folder = os.path.dirname(line[1:]) if line.startswith('n/') else ''
+        while folder not in ('', '/') and folder not in seen:
+            seen.add(folder)
+            try:
+                found = [f for f in os.listdir(folder) if f.lower().endswith('.uproject')]
+            except OSError:
+                found = []
+            if len(found) == 1:
+                projects.add(os.path.join(folder, found[0]))
+            folder = os.path.dirname(folder)
+    if len(projects) != 1:
+        raise RuntimeError('Cannot tell the open project from the editor (%d candidates); pass the .uproject path' % len(projects))
+    return projects.pop()
+
+
 def auto_project():
     """With no project given, use the UnrealEditor listening on the MCP port, so the token matches the open project."""
     url = urlparse(os.environ.get('CLAUDE_CODE_MCP_SERVER_URL') or os.environ.get('UE_MCP_URL') or 'http://127.0.0.1:3000/mcp')
-    name, cmdline = process_info(listening_pid(url.port or 80))
+    pid = listening_pid(url.port or 80)
+    name, cmdline = process_info(pid)
     if not name.lower().startswith('unrealeditor'):
         raise RuntimeError('Port owner is not UnrealEditor')
+    if sys.platform == 'darwin' and '.uproject' not in cmdline.lower():
+        return project_from_open_files(pid)
     return project_from_command_line(cmdline)
 
 
