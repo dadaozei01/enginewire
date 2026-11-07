@@ -43,7 +43,7 @@
 - 改蓝图逻辑先用 manage_blueprint 的 read_graph_as_code 读成文本，改完用 write_graph_from_code 写回（Epic 5.8 蓝图 DSL 文本格式，0.6.0 起），少用逐节点建线；改完 compile 并检查无用节点。本仓库已修复中文界面、多输出函数、运算节点等读写问题（UPSTREAM.md 第 8–15 项）；写回时保留读出的 `; id` 注释，菜单里没有的节点（如 SpawnActor<蓝图类>）靠它复用原节点，去掉注释会被整体拒绝。写入失败会整体拒绝，不会写坏蓝图。
 - Niagara：create_effect 建拖尾后读回 SpawnRate.SpawnRate，若为 0 用 set_parameter_value 重设；跟随拖尾（LocationBasedRibbon）的发射器静止且粒子无速度时长度为 0、看不到。看特效以 PIE 画面为准，截图回执里"视口不是实时"的提示在 PIE 下也会出现。用户开着某资产的 Niagara 编辑器时，其副本保存会覆盖 MCP 写入。
 
-- Niagara Scratch（UE 5.8）：要写自定义模块用 create_niagara_scratch_module 建在系统上（才会出现在「本地模块」），edit 改图，apply 编译并读逐脚本错误，get 读图。先关掉该系统的 Niagara 编辑器。运算节点的两个数字输入都要连线，否则编译失败。Custom HLSL 和数据接口函数节点第一版没有。
+- Niagara Scratch（UE 5.8）：要写自定义模块用 create_niagara_scratch_module 建在系统上（才会出现在「本地模块」），edit 改图，apply 编译并读逐脚本错误，get 读图。先关掉该系统的 Niagara 编辑器。运算节点的两个数字输入都要连线，否则编译失败。Custom HLSL 用 add_node 的 kind custom_hlsl（hlsl、inputs、outputs），改代码用 set_hlsl：引脚名就是变量名，区分大小写，输出直接赋值、不写 return；属性和模块输入经 Map Get 连到输入引脚，输出连到 Map Set；引擎会改写的名字（含空格、保留字、节点两侧重名）直接被拒绝。HLSL 语法错误只出现在 apply 的 compiledScripts，判断成败看 compileOk，scratchScripts 仍显示 ok。数据接口函数节点还没有。
 
 ## 故障定位
 

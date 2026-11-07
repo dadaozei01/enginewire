@@ -9,7 +9,9 @@
 // reflection (classes by name, properties by name) and virtual dispatch, which need no exported symbol.
 //
 // A new pin takes the Add pin's slot and a fresh Add pin goes after it, as the engine's RequestNewTypedPin does. Custom
-// HLSL (not in this version) indexes its signature by pin position, so it must add its pins through AddTypedPin too.
+// HLSL depends on that: UNiagaraNodeCustomHlsl::BuildParameterMapHistory indexes its signature by pin position, skipping
+// only the Add pin, so a pin after the Add pin reads past the end of the signature and crashes the system editor.
+// Its OnNewTypedPinAdded rebuilds the signature from the pins, so AddTypedPin keeps the two in step.
 #include "Domains/NiagaraAuthoring/McpNiagaraContext.h"
 
 #if MCP_HAS_NIAGARA_INPUT_OVERRIDES && ENGINE_MINOR_VERSION >= 8
@@ -90,6 +92,30 @@ UEdGraphPin* AddTypedPin(UNiagaraNodeWithDynamicPins* Node, EEdGraphPinDirection
     FDynamicPinsAccess::NewTypedPinAdded(Node, AddPin);
     Node->MarkNodeRequiresSynchronization(TEXT("McpScratchAddPin"), true);
     return AddPin;
+}
+
+bool IsCustomHlslNode(const UEdGraphNode* Node)
+{
+    static UClass* CustomHlslClass = NiagaraEditorClass(TEXT("NiagaraNodeCustomHlsl"));
+    return Node && CustomHlslClass && Node->IsA(CustomHlslClass);
+}
+
+// The node's code is private and SetCustomHlsl does not link, so this writes the property and reports the change the way
+// the details panel does. That rebuilds the pins from the signature; links and values carry over by pin name, but any
+// UEdGraphPin* held across this call is stale.
+bool WriteCustomHlsl(UEdGraphNode* Node, const FString& Code, FString& OutError)
+{
+    FStrProperty* Property = CastField<FStrProperty>(Node->GetClass()->FindPropertyByName(TEXT("CustomHlsl")));
+    if (!Property)
+    {
+        OutError = TEXT("This engine's Custom HLSL node has no CustomHlsl property.");
+        return false;
+    }
+    Node->Modify();
+    Property->SetPropertyValue_InContainer(Node, Code);
+    FPropertyChangedEvent Changed(Property, EPropertyChangeType::ValueSet);
+    Node->PostEditChangeProperty(Changed);
+    return true;
 }
 
 UEdGraphPin* FindMapPin(UEdGraphNode* Node, EEdGraphPinDirection Direction)
@@ -351,6 +377,7 @@ FString NodeKindText(const UEdGraphNode* Node)
     if (ClassName == TEXT("NiagaraNodeParameterMapSet")) return TEXT("map_set");
     if (ClassName == TEXT("NiagaraNodeIf")) return TEXT("if");
     if (ClassName == TEXT("NiagaraNodeSelect")) return TEXT("select");
+    if (ClassName == TEXT("NiagaraNodeCustomHlsl")) return TEXT("custom_hlsl");
     if (Node->IsA<UNiagaraNodeOp>()) return TEXT("op");
     if (Node->IsA<UNiagaraNodeFunctionCall>()) return TEXT("function");
     if (Node->IsA<UNiagaraNodeInput>()) return TEXT("input");
@@ -369,6 +396,13 @@ TSharedPtr<FJsonObject> DescribeGraph(UNiagaraGraph* Graph)
         NodeObj->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::ListView).ToString());
         NodeObj->SetNumberField(TEXT("x"), Node->NodePosX);
         NodeObj->SetNumberField(TEXT("y"), Node->NodePosY);
+        if (IsCustomHlslNode(Node))
+        {
+            if (const FStrProperty* Code = CastField<FStrProperty>(Node->GetClass()->FindPropertyByName(TEXT("CustomHlsl"))))
+            {
+                NodeObj->SetStringField(TEXT("hlsl"), Code->GetPropertyValue_InContainer(Node));
+            }
+        }
         TArray<TSharedPtr<FJsonValue>> Pins;
         for (UEdGraphPin* Pin : Node->Pins)
         {
@@ -424,6 +458,7 @@ public:
         if (Name == TEXT("declare_output")) return DeclareParameter(Op, false, OutError);
         if (Name == TEXT("add_node")) return AddNode(Op, OutError) != nullptr;
         if (Name == TEXT("add_pin")) return AddPin(Op, OutError);
+        if (Name == TEXT("set_hlsl")) return SetHlsl(Op, OutError);
         if (Name == TEXT("connect")) return ConnectPins(Op, OutError);
         if (Name == TEXT("disconnect")) return DisconnectPins(Op, OutError);
         if (Name == TEXT("set_default")) return SetDefault(Op, OutError);
@@ -523,10 +558,10 @@ private:
         NextX = FMath::Max(NextX, Node->NodePosX + ColumnWidth);
     }
 
-    bool AddPinsFromList(UEdGraphNode* Node, const TSharedPtr<FJsonObject>& Op, EEdGraphPinDirection Direction, FString& OutError)
+    bool AddPinsFromList(UEdGraphNode* Node, const TSharedPtr<FJsonObject>& Op, const TCHAR* Field, EEdGraphPinDirection Direction, FString& OutError)
     {
         const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
-        if (!Op->TryGetArrayField(TEXT("pins"), List))
+        if (!Op->TryGetArrayField(Field, List))
         {
             return true;
         }
@@ -535,7 +570,7 @@ private:
             const TSharedPtr<FJsonObject>* PinObj = nullptr;
             if (!Each.IsValid() || !Each->TryGetObject(PinObj))
             {
-                OutError = TEXT("'pins' holds {name, type} objects.");
+                OutError = FString::Printf(TEXT("'%s' holds {name, type} objects."), Field);
                 return false;
             }
             if (!AddPinNamed(Node, GetJsonStringField(*PinObj, TEXT("name")), GetJsonStringField(*PinObj, TEXT("type")), Direction, OutError))
@@ -573,12 +608,44 @@ private:
                 return nullptr;
             }
         }
-        return AddTypedPin(Dynamic, Direction, Type, FName(*Name), OutError);
+        const bool bCustomHlsl = IsCustomHlslNode(Node);
+        if (bCustomHlsl && !CheckCustomHlslPinName(Dynamic, Name, Direction, OutError))
+        {
+            return nullptr;
+        }
+        UEdGraphPin* Pin = AddTypedPin(Dynamic, Direction, Type, FName(*Name), OutError);
+        if (Pin && bCustomHlsl)
+        {
+            // OnNewTypedPinAdded marks the pin for renaming, which would open its name box when the graph is next shown.
+            Dynamic->CancelEditablePinName(FText::GetEmpty(), Pin);
+        }
+        return Pin;
+    }
+
+    // The engine would quietly rename a pin it dislikes, and code that uses the name asked for would then not compile. The
+    // Add pin stands in for the new pin: the check needs a pin to leave out, and the Add pin's name is not free anyway.
+    bool CheckCustomHlslPinName(UNiagaraNodeWithDynamicPins* Node, const FString& Name, EEdGraphPinDirection Direction, FString& OutError)
+    {
+        if (Name.IsEmpty())
+        {
+            OutError = TEXT("A Custom HLSL pin needs a 'name'; the code uses it as a variable.");
+            return false;
+        }
+        const UEdGraphPin* AddPin = FindAddPin(Node, Direction);
+        FText Refusal;
+        // Through the base class: the check is public on UNiagaraNode and protected on UNiagaraNodeWithDynamicPins.
+        if (AddPin && !static_cast<UNiagaraNode*>(Node)->VerifyEditablePinName(FText::FromString(Name), Refusal, AddPin))
+        {
+            OutError = FString::Printf(TEXT("Pin name '%s' refused: %s"), *Name, *Refusal.ToString());
+            return false;
+        }
+        return true;
     }
 
     UEdGraphNode* AddNode(const TSharedPtr<FJsonObject>& Op, FString& OutError)
     {
         const FString Kind = GetJsonStringField(Op, TEXT("kind"));
+        const bool bCustomHlsl = Kind == TEXT("custom_hlsl");
         UEdGraphNode* Node = nullptr;
         EEdGraphPinDirection PinDirection = EGPD_Output;
         if (Kind == TEXT("map_get") || Kind == TEXT("map_set"))
@@ -611,9 +678,13 @@ private:
         {
             Node = NewFunctionNode(GetJsonStringField(Op, TEXT("functionScriptPath")), OutError);
         }
+        else if (bCustomHlsl)
+        {
+            Node = NewCustomHlslNode(Op, OutError);
+        }
         else
         {
-            OutError = FString::Printf(TEXT("Unknown node kind '%s': map_get, map_set, op, if, select or function."), *Kind);
+            OutError = FString::Printf(TEXT("Unknown node kind '%s': map_get, map_set, op, if, select, function or custom_hlsl."), *Kind);
         }
         if (!Node)
         {
@@ -625,7 +696,41 @@ private:
         {
             Aliases.Add(Alias, Node);
         }
-        return AddPinsFromList(Node, Op, PinDirection, OutError) ? Node : nullptr;
+        if (bCustomHlsl)
+        {
+            // Pins first: writing the code rebuilds the pins from the signature, which then holds them all.
+            if (AddPinsFromList(Node, Op, TEXT("inputs"), EGPD_Input, OutError)
+                && AddPinsFromList(Node, Op, TEXT("outputs"), EGPD_Output, OutError)
+                && WriteCustomHlsl(Node, GetJsonStringField(Op, TEXT("hlsl")), OutError))
+            {
+                return Node;
+            }
+            Aliases.Remove(Alias);
+            RemoveGraphNode(Graph, Node);
+            return nullptr;
+        }
+        return AddPinsFromList(Node, Op, TEXT("pins"), PinDirection, OutError) ? Node : nullptr;
+    }
+
+    UEdGraphNode* NewCustomHlslNode(const TSharedPtr<FJsonObject>& Op, FString& OutError)
+    {
+        if (GetJsonStringField(Op, TEXT("hlsl")).IsEmpty())
+        {
+            OutError = TEXT("kind custom_hlsl needs 'hlsl', the function's body.");
+            return nullptr;
+        }
+        if (Op->HasField(TEXT("pins")))
+        {
+            OutError = TEXT("kind custom_hlsl takes 'inputs' and 'outputs', not 'pins'.");
+            return nullptr;
+        }
+        UClass* Class = NiagaraEditorClass(TEXT("NiagaraNodeCustomHlsl"));
+        if (!Class)
+        {
+            OutError = TEXT("This engine has no Custom HLSL node class.");
+            return nullptr;
+        }
+        return NewGraphNode(Graph, Class, [](UEdGraphNode*) {});
     }
 
     UEdGraphNode* NewMapNode(bool bGet, FString& OutError)
@@ -722,6 +827,27 @@ private:
         const FString Direction = GetJsonStringField(Op, TEXT("direction"));
         const bool bInput = Direction.IsEmpty() ? FindAddPin(Node, EGPD_Input) != nullptr : Direction.Equals(TEXT("input"), ESearchCase::IgnoreCase);
         return AddPinNamed(Node, GetJsonStringField(Op, TEXT("name")), GetJsonStringField(Op, TEXT("type")), bInput ? EGPD_Input : EGPD_Output, OutError) != nullptr;
+    }
+
+    bool SetHlsl(const TSharedPtr<FJsonObject>& Op, FString& OutError)
+    {
+        UEdGraphNode* Node = ResolveNode(GetJsonStringField(Op, TEXT("node")), OutError);
+        if (!Node)
+        {
+            return false;
+        }
+        if (!IsCustomHlslNode(Node))
+        {
+            OutError = FString::Printf(TEXT("'%s' is a %s node, not custom_hlsl."), *GetJsonStringField(Op, TEXT("node")), *NodeKindText(Node));
+            return false;
+        }
+        const FString Code = GetJsonStringField(Op, TEXT("hlsl"));
+        if (Code.IsEmpty())
+        {
+            OutError = TEXT("set_hlsl needs 'hlsl', the function's body.");
+            return false;
+        }
+        return WriteCustomHlsl(Node, Code, OutError);
     }
 
     bool ResolveWire(const TSharedPtr<FJsonObject>& Op, UEdGraphPin*& OutFrom, UEdGraphPin*& OutTo, FString& OutError)

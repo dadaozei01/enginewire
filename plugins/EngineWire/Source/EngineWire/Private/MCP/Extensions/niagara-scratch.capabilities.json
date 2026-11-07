@@ -14,7 +14,9 @@
     "本地模块",
     "暂存模块",
     "niagara module graph",
-    "create scratch module"
+    "create scratch module",
+    "custom hlsl",
+    "niagara hlsl"
    ],
    "summary": "Make a Scratch module on a Niagara system: its script lives in System.ScratchPadScripts, the list the system editor shows under Local Modules (a script on an emitter runs but never shows there). Goes on the stage's stack (emitterName unless a System stage; addToStack false leaves it unused) with no inputs yet; operations can build its graph in the same call. Nothing is compiled or saved until apply_niagara_scratch_module. An open editor of the system is refused (SYSTEM_EDITOR_OPEN), a taken name is NAME_TAKEN.",
    "whenToUse": [
@@ -22,7 +24,7 @@
    ],
    "whenNotToUse": [
     "A stock module does it: use add_niagara_module.",
-    "Custom HLSL or data interface functions: not in this version."
+    "Data interface functions: not in this version."
    ]
   },
   "schemas": {
@@ -83,13 +85,14 @@
           "declare_output",
           "add_node",
           "add_pin",
+          "set_hlsl",
           "connect",
           "disconnect",
           "set_default",
           "set_position",
           "remove_node"
          ],
-         "description": "declare_input: name, type; a Module.<name> read on the script's Map Get (made if there is none), shown on the module's stack. declare_output: name, type; an Output.Module.<name> write on its Map Set. A name with a namespace (Particles.Position) is kept. add_node: kind, as, x, y and what the kind needs. add_pin: node, name, type, direction. connect and disconnect: from, to. set_default: pin, value. set_position: node, x, y. remove_node: node."
+         "description": "declare_input: name, type; a Module.<name> read on the script's Map Get (made if there is none), shown on the module's stack. declare_output: name, type; an Output.Module.<name> write on its Map Set. A name with a namespace (Particles.Position) is kept. add_node: kind, as, x, y and what the kind needs. add_pin: node, name, type, direction. connect and disconnect: from, to. set_default: pin, value. set_position: node, x, y. remove_node: node. set_hlsl: node, hlsl; replaces a custom_hlsl node's code, keeping its pins, links and values."
         },
         "kind": {
          "type": "string",
@@ -99,9 +102,10 @@
           "op",
           "if",
           "select",
-          "function"
+          "function",
+          "custom_hlsl"
          ],
-         "description": "add_node: the node. map_get reads the map the script receives; map_set joins the chain before the output; op takes opName; select takes selectorType, options; function takes functionScriptPath; map_get, map_set, if and select take pins."
+         "description": "add_node: the node. map_get reads the map the script receives; map_set joins the chain before the output; op takes opName; select takes selectorType, options; function takes functionScriptPath; map_get, map_set, if and select take pins. custom_hlsl takes hlsl, inputs, outputs."
         },
         "as": {
          "type": "string",
@@ -182,6 +186,50 @@
           ]
          },
          "description": "add_node: pins to add now, each {name, type}. If and Select name their pins after the type in the editor's language (the name given is not kept), so read the names from the reply's nodes before connecting."
+        },
+        "hlsl": {
+         "type": "string",
+         "description": "kind custom_hlsl and set_hlsl: the function's body. Pin names are its variables, case-sensitive: read inputs, assign outputs, no return. It sees only its pins, so bring attributes and module inputs in by wiring a Map Get to an input pin, and wire each output to a Map Set; a Custom HLSL syntax error shows up in apply_niagara_scratch_module."
+        },
+        "inputs": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+           "name": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ]
+         },
+         "description": "kind custom_hlsl: input pins, each {name, type}. A name the engine would change (a space, a reserved word, one used on either side of the node) is refused."
+        },
+        "outputs": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+           "name": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ]
+         },
+         "description": "kind custom_hlsl: output pins, each {name, type}. Same naming rules as inputs."
         },
         "x": {
          "type": "number",
@@ -413,9 +461,11 @@
     "niagara if",
     "niagara select",
     "connect scratch pins",
-    "编辑暂存模块"
+    "编辑暂存模块",
+    "custom hlsl",
+    "niagara hlsl"
    ],
-   "summary": "Edit a system Scratch module's graph with a batch of operations: declare inputs and outputs, add Map Get, Map Set, op, If, Select and function nodes, add pins, connect, disconnect, set pin values, move and remove nodes. Types are checked by the engine's own connection rules. Compile with apply_niagara_scratch_module afterwards; an open editor of the system is refused.",
+   "summary": "Edit a system Scratch module's graph with a batch of operations: declare inputs and outputs, add Map Get, Map Set, op, If, Select, function and Custom HLSL nodes, add pins, connect, disconnect, set pin values, move and remove nodes. Types are checked by the engine's own connection rules. Compile with apply_niagara_scratch_module afterwards; an open editor of the system is refused.",
    "whenToUse": [
     "A Scratch module made by create_niagara_scratch_module needs another input, node or wire."
    ],
@@ -462,13 +512,14 @@
           "declare_output",
           "add_node",
           "add_pin",
+          "set_hlsl",
           "connect",
           "disconnect",
           "set_default",
           "set_position",
           "remove_node"
          ],
-         "description": "declare_input: name, type; a Module.<name> read on the script's Map Get (made if there is none), shown on the module's stack. declare_output: name, type; an Output.Module.<name> write on its Map Set. A name with a namespace (Particles.Position) is kept. add_node: kind, as, x, y and what the kind needs. add_pin: node, name, type, direction. connect and disconnect: from, to. set_default: pin, value. set_position: node, x, y. remove_node: node."
+         "description": "declare_input: name, type; a Module.<name> read on the script's Map Get (made if there is none), shown on the module's stack. declare_output: name, type; an Output.Module.<name> write on its Map Set. A name with a namespace (Particles.Position) is kept. add_node: kind, as, x, y and what the kind needs. add_pin: node, name, type, direction. connect and disconnect: from, to. set_default: pin, value. set_position: node, x, y. remove_node: node. set_hlsl: node, hlsl; replaces a custom_hlsl node's code, keeping its pins, links and values."
         },
         "kind": {
          "type": "string",
@@ -478,9 +529,10 @@
           "op",
           "if",
           "select",
-          "function"
+          "function",
+          "custom_hlsl"
          ],
-         "description": "add_node: the node. map_get reads the map the script receives; map_set joins the chain before the output; op takes opName; select takes selectorType, options; function takes functionScriptPath; map_get, map_set, if and select take pins."
+         "description": "add_node: the node. map_get reads the map the script receives; map_set joins the chain before the output; op takes opName; select takes selectorType, options; function takes functionScriptPath; map_get, map_set, if and select take pins. custom_hlsl takes hlsl, inputs, outputs."
         },
         "as": {
          "type": "string",
@@ -561,6 +613,50 @@
           ]
          },
          "description": "add_node: pins to add now, each {name, type}. If and Select name their pins after the type in the editor's language (the name given is not kept), so read the names from the reply's nodes before connecting."
+        },
+        "hlsl": {
+         "type": "string",
+         "description": "kind custom_hlsl and set_hlsl: the function's body. Pin names are its variables, case-sensitive: read inputs, assign outputs, no return. It sees only its pins, so bring attributes and module inputs in by wiring a Map Get to an input pin, and wire each output to a Map Set; a Custom HLSL syntax error shows up in apply_niagara_scratch_module."
+        },
+        "inputs": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+           "name": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ]
+         },
+         "description": "kind custom_hlsl: input pins, each {name, type}. A name the engine would change (a space, a reserved word, one used on either side of the node) is refused."
+        },
+        "outputs": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+           "name": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ]
+         },
+         "description": "kind custom_hlsl: output pins, each {name, type}. Same naming rules as inputs."
         },
         "x": {
          "type": "number",
@@ -658,6 +754,87 @@
        "op": "declare_input",
        "name": "MaxOffset",
        "type": "Float"
+      }
+     ]
+    },
+    "output": {
+     "success": true,
+     "message": "Scratch module edited.",
+     "scriptName": "LateralOffset"
+    }
+   },
+   {
+    "title": "Compute a declared output in a Custom HLSL node.",
+    "input": {
+     "action": "edit_niagara_scratch_module",
+     "systemPath": "/Game/FX/NS_Crowd",
+     "scriptName": "LateralOffset",
+     "operations": [
+      {
+       "op": "declare_input",
+       "name": "SamplePos",
+       "type": "Position"
+      },
+      {
+       "op": "declare_input",
+       "name": "RightVec",
+       "type": "Vector"
+      },
+      {
+       "op": "declare_input",
+       "name": "Lateral",
+       "type": "Float"
+      },
+      {
+       "op": "declare_output",
+       "name": "Particles.Position",
+       "type": "Position"
+      },
+      {
+       "op": "add_node",
+       "kind": "custom_hlsl",
+       "as": "offset",
+       "inputs": [
+        {
+         "name": "SamplePos",
+         "type": "Position"
+        },
+        {
+         "name": "RightVec",
+         "type": "Vector"
+        },
+        {
+         "name": "Lateral",
+         "type": "Float"
+        }
+       ],
+       "outputs": [
+        {
+         "name": "Result",
+         "type": "Position"
+        }
+       ],
+       "hlsl": "Result = SamplePos + RightVec * Lateral;"
+      },
+      {
+       "op": "connect",
+       "from": "inputs.Module.SamplePos",
+       "to": "offset.SamplePos"
+      },
+      {
+       "op": "connect",
+       "from": "inputs.Module.RightVec",
+       "to": "offset.RightVec"
+      },
+      {
+       "op": "connect",
+       "from": "inputs.Module.Lateral",
+       "to": "offset.Lateral"
+      },
+      {
+       "op": "connect",
+       "from": "offset.Result",
+       "to": "outputs.Particles.Position"
       }
      ]
     },
@@ -889,7 +1066,9 @@
     "list scratch modules",
     "read scratch graph",
     "niagara ops list",
-    "查看暂存模块"
+    "查看暂存模块",
+    "custom hlsl",
+    "niagara hlsl"
    ],
    "summary": "Read a system's Scratch scripts: every script with its owner (system, listed under Local Modules; or emitter:<name>, which runs but is not listed) and usage; scriptName adds that script's graph with node GUIDs, pins and wires. listOps adds the op names kind op takes.",
    "whenToUse": [
@@ -965,7 +1144,7 @@
        "type": "object",
        "x-unreal-reflection-boundary": true
       },
-      "description": "The graph: each {node (GUID), kind, title, x, y, pins [{name, direction, type, default, linkedTo}]}."
+      "description": "The graph: each {node (GUID), kind, title, x, y, hlsl (custom_hlsl only), pins [{name, direction, type, default, linkedTo}]}."
      },
      "aliases": {
       "type": "object",

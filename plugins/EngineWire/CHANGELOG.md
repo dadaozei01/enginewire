@@ -9,6 +9,8 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 ### Added (Niagara scratch modules, UE 5.8 fork)
 - `create_niagara_scratch_module`, `edit_niagara_scratch_module`, `apply_niagara_scratch_module` and `get_niagara_scratch_module` author system-level Scratch modules: the script is kept in `System.ScratchPadScripts`, so it is listed under Local Modules. A graph takes module inputs and outputs, Map Get/Set, op, If, Select and function nodes; apply compiles the system and reports errors per script. Custom HLSL and data interface function nodes are not included yet.
 
+- Scratch modules take Custom HLSL nodes: `add_node` with `kind: custom_hlsl` (`hlsl`, `inputs`, `outputs`), `set_hlsl` to replace the code, and the code in `get_niagara_scratch_module`. Pins stay before the Add pin and in step with the node's signature; a pin name the engine would change is refused.
+
 ### Fixed (Niagara, UE 5.8 fork)
 - `add_spawn_burst_module` adds the module to Emitter Update, not Emitter Spawn.
 - `add_user_parameter` and `bind_parameter` accept Position, Quat, Vector2 and Vector4; an unknown type is refused instead of becoming a Float.

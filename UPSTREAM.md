@@ -90,4 +90,16 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    未验证：Windows；运行关卡（PIE）中的粒子位置，以上位置结论来自预览对照，不是数值比对。
 
+20. Niagara Scratch 的 Custom HLSL 节点（2026-11-07，UE 5.8 Mac）：`add_node` 增加 `kind: custom_hlsl`（`hlsl`、`inputs`、`outputs`），新增 `set_hlsl` 操作，`get_niagara_scratch_module` 返回节点代码。
+
+   引脚走第 19 项的 `AddTypedPin`：新引脚排在 Add 引脚之前，`UNiagaraNodeCustomHlsl::OnNewTypedPinAdded` 同步 Signature。引擎的 `BuildParameterMapHistory` 按引脚下标取 Signature，只跳过 Add 引脚，所以引脚排到 Add 之后会越界闪退（VibeUE 的 `add_pin` 用 `CreatePin` 就是这样）。代码属性是私有的，`SetCustomHlsl` 未导出，这里用反射写入后调用 `PostEditChangeProperty`，与细节面板同一路径；它会按 Signature 重建引脚，连线和默认值按名字保留，因此创建时先加引脚后写代码。引擎会静默改写的引脚名（含空格、保留字、节点两侧重名）用它自己的 `VerifyEditablePinName` 提前拒绝，否则代码里的名字对不上。加完引脚清掉待重命名状态，避免图表打开时引脚名进入编辑框。节点中途失败会整个移除，不留半成品。
+
+   已实测（工程目录安装）：复制 `NS_ScratchFlow` 为测试系统，用 HLSL 重写横向偏移模块，编译通过并保存；用户对照新旧两个系统的预览无异常，系统编辑器打开、双击打开图表、重启后从磁盘加载都不崩，代码和引脚保留；脚本统计中生成和更新脚本的操作数与原系统一致。另测：非法引脚名和节点两侧重名被拒绝并带引擎建议的名字，失败不留节点，语法错误不保存，已连线节点上加引脚和 `set_hlsl` 后连线与默认值保留，未连线的输入引脚可用默认值。
+
+   已知情况：不支持 Map 类型和数据接口类型的引脚，也不能删除或改名引脚（删节点重建）。VM 编译错误不带节点信息，所以语法错误只出现在 `compiledScripts` 且 `compileOk` 为 false，`scratchScripts` 仍显示 ok。
+
+   引擎问题，与本项无关：打开使用 Sample Spline 的系统并编译时，`NiagaraStackEntry.cpp:832` 报 `Duplicate child Distance Distribution Mode`，堆栈中没有本插件；ensure 拉起的 `CrashReportClientEditor` 退出时又在 `FScheduler::StopWorkers` 崩溃，弹出系统崩溃窗口，编辑器不受影响。两者都在引擎内，本仓库不改引擎。Mac 编辑器读偏好设置 `bSendUnattendedBugReports`，关闭后 ensure 不再拉起报告程序。
+
+   未验证：Windows；粒子位置的数值比对（Python 读不到位置，结论来自预览对照）；未在未经 Scratch 修改的系统上单独复现上述 ensure。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。
