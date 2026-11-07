@@ -26,7 +26,7 @@
 | Windows x64 / UE 5.4.4 | 已编译、加载，MCP 与蓝图/材质/Niagara 操作实测通过（2026-10-23 包）；v0.6.0-beta-f-ue54.3 包（2026-10-26）含退出崩溃修复，重新编译后编辑器加载、作用域令牌连接、只读查询实测通过，退出稳定性与写入尚未在该版本上重新验证；2026-10-23 的旧包不含此修复 |
 | Mac (Apple Silicon) / UE 5.4.4 | 已用 Xcode 27.0 编译为 Universal（arm64 + x86_64）；2026-10-25 含退出崩溃修复重新编译，编辑器加载、作用域令牌连接、只读查询实测通过，此后多次退出未再崩溃；写入已实测蓝图创建与复制、组件、批量写图表、删节点与函数、生成 Actor、编辑器内 Python、PIE 与截图；2026-10-31 按 v0.6.0 重新编译，蓝图文本读写往返、材质创建与连节点、Niagara 拖尾创建与调参实测通过（见 UPSTREAM.md 第 8–15 项）；同日新增 Chaos 破碎命令（第 16 项），从 StaticMesh 新建 GC、Voronoi 切割、Auto Cluster、读取与物理设置、撤销与保存、放置 Actor 实测通过，PIE 中落地碎开。其他写入首次使用后需检查结果 |
 | Windows x64 / UE 5.8.4 | [v0.6.0-ue58.1](https://github.com/dadaozei01/enginewire-ue54/releases/tag/v0.6.0-ue58.1) 预发布。已验证插件加载、MCP 连接、引擎级安装、中文蓝图文本往返与编译，以及 Chaos 破碎和 PIE。完整范围见 [UPSTREAM.md](UPSTREAM.md) 第 17 项。 |
-| Mac (Apple Silicon) / UE 5.8.4 | 已用 Xcode 27.0 编译为 Universal，插件代码未改动；[v0.6.0-ue58.2](https://github.com/dadaozei01/enginewire-ue54/releases/tag/v0.6.0-ue58.2) 为预发布。工程加载、MCP 连接、蓝图、材质与实例、Niagara、Python、Chaos 破碎、PIE、截图和 3 次退出实测通过。已知问题和未覆盖范围见 [UPSTREAM.md](UPSTREAM.md) 第 18 项。 |
+| Mac (Apple Silicon) / UE 5.8.4 | 已用 Xcode 27.0 编译为 Universal，插件代码未改动；[v0.6.0-ue58.2](https://github.com/dadaozei01/enginewire-ue54/releases/tag/v0.6.0-ue58.2) 为预发布。工程加载、MCP 连接、蓝图、材质与实例、Niagara、Python、Chaos 破碎、PIE、截图和 3 次退出实测通过。已知问题和未覆盖范围见 [UPSTREAM.md](UPSTREAM.md) 第 18 项。 分支 `feat/niagara-scratch-ue58` 新增系统级 Niagara Scratch 模块，尚未发布，见第 19 项。 |
 
 2026-10-25 起：修复编辑器退出时 Native MCP 关闭竞态导致的偶发崩溃（见 [UPSTREAM.md](UPSTREAM.md) 第 7 条）；请求头 helper 优先使用作用域令牌，配置见 [Claude Code 配置](docs/claude-code.md) 的「作用域令牌」。
 

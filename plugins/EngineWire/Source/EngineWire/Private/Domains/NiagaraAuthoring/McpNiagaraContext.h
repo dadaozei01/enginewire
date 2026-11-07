@@ -177,7 +177,10 @@ TSharedPtr<FJsonValue> ReadNiagaraValue(const FNiagaraParameterStore& Store, con
 // With actorName, puts the placed effect's own user parameter values (and the ones it overrides) under placed; false
 // after replying ACTOR_NOT_FOUND or COMPONENT_NOT_FOUND. Without actorName it does nothing and returns true.
 bool AddPlacedUserParameters(FActionContext& Context, UNiagaraSystem* System);
+// An invalid definition (IsValid() false) for a name it does not know: a misspelt type must not become a Float.
 FNiagaraTypeDefinition ResolveNiagaraTypeByName(const FString& ParamType);
+// The names ResolveNiagaraTypeByName takes, for an error message.
+const TCHAR* NiagaraTypeNamesHelp();
 // Every script whose rapid-iteration store holds module inputs: the system spawn/update scripts
 // (emitter-stage modules are mirrored there) plus each emitter's own scripts.
 inline TArray<UNiagaraScript*> GatherModuleInputScripts(UNiagaraSystem* System)
@@ -266,4 +269,6 @@ bool HandleDataInterfaceAction(FActionContext& Context, const FString& SubAction
 bool HandleEventAction(FActionContext& Context, const FString& SubAction);
 bool HandleSimulationAction(FActionContext& Context, const FString& SubAction);
 bool HandleInfoValidationAction(FActionContext& Context, const FString& SubAction);
+// In McpNiagaraScratch.cpp: system-level scratch modules, the ones listed under Local Modules.
+bool HandleScratchAction(FActionContext& Context, const FString& SubAction);
 }

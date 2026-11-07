@@ -6,6 +6,14 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 
 ## [Unreleased]
 
+### Added (Niagara scratch modules, UE 5.8 fork)
+- `create_niagara_scratch_module`, `edit_niagara_scratch_module`, `apply_niagara_scratch_module` and `get_niagara_scratch_module` author system-level Scratch modules: the script is kept in `System.ScratchPadScripts`, so it is listed under Local Modules. A graph takes module inputs and outputs, Map Get/Set, op, If, Select and function nodes; apply compiles the system and reports errors per script. Custom HLSL and data interface function nodes are not included yet.
+
+### Fixed (Niagara, UE 5.8 fork)
+- `add_spawn_burst_module` adds the module to Emitter Update, not Emitter Spawn.
+- `add_user_parameter` and `bind_parameter` accept Position, Quat, Vector2 and Vector4; an unknown type is refused instead of becoming a Float.
+- `set_dynamic_input` reaches a Set Variables input such as `Module.Particles.SpriteRotation`.
+
 ### Fixed (graph as code, UE 5.4 fork)
 - Localised editors: common menu categories (变量, 工具|流程控制, 类, 游戏) are read and matched by their English source text, so a graph read in a Chinese editor writes back.
 - A Math Expression id holding parentheses parses as one symbol; a member is matched by its owning class, so a Blueprint's GetSlot is not taken for a widget's.

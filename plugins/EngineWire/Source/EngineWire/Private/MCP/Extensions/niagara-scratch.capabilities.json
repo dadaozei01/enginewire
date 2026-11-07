@@ -1,0 +1,1061 @@
+[
+ {
+  "id": "manage_effect.create_niagara_scratch_module",
+  "aliases": [
+   "manage_effect.new_niagara_scratch_module"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara scratch",
+   "topics": [
+    "scratch pad",
+    "scratch module",
+    "local modules",
+    "本地模块",
+    "暂存模块",
+    "niagara module graph",
+    "create scratch module"
+   ],
+   "summary": "Make a Scratch module on a Niagara system: its script lives in System.ScratchPadScripts, the list the system editor shows under Local Modules (a script on an emitter runs but never shows there). Goes on the stage's stack (emitterName unless a System stage; addToStack false leaves it unused) with no inputs yet; operations can build its graph in the same call. Nothing is compiled or saved until apply_niagara_scratch_module. An open editor of the system is refused (SYSTEM_EDITOR_OPEN), a taken name is NAME_TAKEN.",
+   "whenToUse": [
+    "A particle needs logic no stock module has: a module with its own inputs and a graph of map reads, ops, branches and function calls."
+   ],
+   "whenNotToUse": [
+    "A stock module does it: use add_niagara_module.",
+    "Custom HLSL or data interface functions: not in this version."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action to execute on the parent tool."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The Niagara system, e.g. /Game/FX/NS_Crowd."
+     },
+     "assetPath": {
+      "type": "string",
+      "description": "Same as systemPath."
+     },
+     "name": {
+      "type": "string",
+      "description": "The script's name; shown under Local Modules and on the stack."
+     },
+     "emitterName": {
+      "type": "string",
+      "description": "Whose stack it joins; the only emitter when omitted. Not read for a System stage."
+     },
+     "stage": {
+      "type": "string",
+      "enum": [
+       "ParticleSpawn",
+       "ParticleUpdate",
+       "EmitterSpawn",
+       "EmitterUpdate",
+       "SystemSpawn",
+       "SystemUpdate"
+      ],
+      "description": "The stage it runs in (default ParticleUpdate)."
+     },
+     "addToStack": {
+      "type": "boolean",
+      "description": "Add it to the stage's stack (default true)."
+     },
+     "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "op"
+       ],
+       "properties": {
+        "op": {
+         "type": "string",
+         "enum": [
+          "declare_input",
+          "declare_output",
+          "add_node",
+          "add_pin",
+          "connect",
+          "disconnect",
+          "set_default",
+          "set_position",
+          "remove_node"
+         ],
+         "description": "declare_input: name, type; a Module.<name> read on the script's Map Get (made if there is none), shown on the module's stack. declare_output: name, type; an Output.Module.<name> write on its Map Set. A name with a namespace (Particles.Position) is kept. add_node: kind, as, x, y and what the kind needs. add_pin: node, name, type, direction. connect and disconnect: from, to. set_default: pin, value. set_position: node, x, y. remove_node: node."
+        },
+        "kind": {
+         "type": "string",
+         "enum": [
+          "map_get",
+          "map_set",
+          "op",
+          "if",
+          "select",
+          "function"
+         ],
+         "description": "add_node: the node. map_get reads the map the script receives; map_set joins the chain before the output; op takes opName; select takes selectorType, options; function takes functionScriptPath; map_get, map_set, if and select take pins."
+        },
+        "as": {
+         "type": "string",
+         "description": "add_node: a name without dots for this batch's later operations."
+        },
+        "name": {
+         "type": "string",
+         "description": "Parameter or pin name."
+        },
+        "type": {
+         "type": "string",
+         "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat; any other is refused."
+        },
+        "node": {
+         "type": "string",
+         "description": "A node: its 'as' in this batch, its GUID, input or output."
+        },
+        "from": {
+         "type": "string",
+         "description": "The output pin: <node>.<pin>, e.g. inputs.Module.SamplePos (declare_input makes the Map Get named inputs, declare_output the Map Set named outputs). Types the engine can convert (Bool to Vector) get a conversion node, as in the editor; only impossible ones are refused."
+        },
+        "to": {
+         "type": "string",
+         "description": "The input pin: <node>.<pin>, e.g. mul.A."
+        },
+        "pin": {
+         "type": "string",
+         "description": "set_default: <node>.<pin>, an input."
+        },
+        "value": {
+         "type": "string",
+         "description": "set_default: the pin's value as the editor writes it: 1.5, true, 1,0,0."
+        },
+        "direction": {
+         "type": "string",
+         "enum": [
+          "input",
+          "output"
+         ],
+         "description": "add_pin: which side (default the side the node takes new pins on)."
+        },
+        "opName": {
+         "type": "string",
+         "description": "kind op: Numeric::Add, Numeric::Mul or a short form (Mul); get_niagara_scratch_module with listOps lists them. A numeric pin left unconnected on an op fails the compile, so wire both inputs of an op."
+        },
+        "functionScriptPath": {
+         "type": "string",
+         "description": "kind function: a function script's path, or a scratch function's name on this system."
+        },
+        "selectorType": {
+         "type": "string",
+         "enum": [
+          "Bool",
+          "Int"
+         ],
+         "description": "kind select: the selector (default Bool)."
+        },
+        "options": {
+         "type": "number",
+         "description": "kind select with an Int selector: how many options (default 2)."
+        },
+        "pins": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+           "name": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ]
+         },
+         "description": "add_node: pins to add now, each {name, type}. If and Select name their pins after the type in the editor's language (the name given is not kept), so read the names from the reply's nodes before connecting."
+        },
+        "x": {
+         "type": "number",
+         "description": "Graph X; omitted places it right of the last node."
+        },
+        "y": {
+         "type": "number",
+         "description": "Graph Y (default 0). Put pure ops below the row their result feeds."
+        }
+       }
+      },
+      "description": "Graph edits, in order. One that fails stops the batch; those before it stay applied, unsaved."
+     }
+    },
+    "required": [
+     "action",
+     "name"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The system's object path."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "The scratch script's name."
+     },
+     "scriptPath": {
+      "type": "string",
+      "description": "The scratch script's object path."
+     },
+     "nodes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "The graph: each {node (GUID), kind, title, x, y, pins [{name, direction, type, default, linkedTo}]}."
+     },
+     "aliases": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Each 'as' name of the batch, and input and output, with its node GUID. Later calls name nodes by GUID."
+     },
+     "operationsApplied": {
+      "type": "number",
+      "description": "How many operations ran."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "What the stack reports wrong after the edit."
+     },
+     "saved": {
+      "type": "boolean",
+      "description": "Whether the system was saved."
+     },
+     "moduleName": {
+      "type": "string",
+      "description": "Its name on the stack; its inputs are <moduleName>.<Input> to set_parameter_value."
+     },
+     "moduleNodeId": {
+      "type": "string",
+      "description": "The stack call's GUID."
+     },
+     "stage": {
+      "type": "string",
+      "description": "The stage."
+     },
+     "emitterName": {
+      "type": "string",
+      "description": "The emitter it joined."
+     },
+     "emitterResolvedBy": {
+      "type": "string",
+      "description": "How an omitted emitterName was resolved."
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "A module that offsets particles sideways.",
+    "input": {
+     "action": "create_niagara_scratch_module",
+     "systemPath": "/Game/FX/NS_Crowd",
+     "emitterName": "Crowd",
+     "name": "LateralOffset",
+     "stage": "ParticleUpdate",
+     "operations": [
+      {
+       "op": "declare_input",
+       "name": "SamplePos",
+       "type": "Position"
+      },
+      {
+       "op": "declare_input",
+       "name": "RightVec",
+       "type": "Vector"
+      },
+      {
+       "op": "declare_input",
+       "name": "Lateral",
+       "type": "Float"
+      },
+      {
+       "op": "add_node",
+       "kind": "op",
+       "opName": "Numeric::Mul",
+       "as": "mul",
+       "y": 220
+      },
+      {
+       "op": "add_node",
+       "kind": "op",
+       "opName": "Numeric::Add",
+       "as": "add",
+       "y": 220
+      },
+      {
+       "op": "add_node",
+       "kind": "map_set",
+       "as": "set",
+       "pins": [
+        {
+         "name": "Particles.Position",
+         "type": "Position"
+        }
+       ]
+      },
+      {
+       "op": "connect",
+       "from": "inputs.Module.RightVec",
+       "to": "mul.A"
+      },
+      {
+       "op": "connect",
+       "from": "inputs.Module.Lateral",
+       "to": "mul.B"
+      },
+      {
+       "op": "connect",
+       "from": "inputs.Module.SamplePos",
+       "to": "add.A"
+      },
+      {
+       "op": "connect",
+       "from": "mul.Result",
+       "to": "add.B"
+      },
+      {
+       "op": "connect",
+       "from": "add.Result",
+       "to": "set.Particles.Position"
+      }
+     ]
+    },
+    "output": {
+     "success": true,
+     "message": "Scratch module LateralOffset made on the system.",
+     "scriptName": "LateralOffset",
+     "moduleName": "LateralOffset"
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "non-idempotent",
+   "longRunning": false,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "create_niagara_scratch_module"
+  }
+ },
+ {
+  "id": "manage_effect.edit_niagara_scratch_module",
+  "aliases": [],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara scratch",
+   "topics": [
+    "edit scratch module",
+    "scratch graph",
+    "map get",
+    "map set",
+    "niagara if",
+    "niagara select",
+    "connect scratch pins",
+    "编辑暂存模块"
+   ],
+   "summary": "Edit a system Scratch module's graph with a batch of operations: declare inputs and outputs, add Map Get, Map Set, op, If, Select and function nodes, add pins, connect, disconnect, set pin values, move and remove nodes. Types are checked by the engine's own connection rules. Compile with apply_niagara_scratch_module afterwards; an open editor of the system is refused.",
+   "whenToUse": [
+    "A Scratch module made by create_niagara_scratch_module needs another input, node or wire."
+   ],
+   "whenNotToUse": [
+    "The script is on an emitter (get_niagara_scratch_module owner emitter:...): only system scripts are edited here.",
+    "A module's input values: use set_parameter_value."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action to execute on the parent tool."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The Niagara system, e.g. /Game/FX/NS_Crowd."
+     },
+     "assetPath": {
+      "type": "string",
+      "description": "Same as systemPath."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "The system's scratch script."
+     },
+     "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "op"
+       ],
+       "properties": {
+        "op": {
+         "type": "string",
+         "enum": [
+          "declare_input",
+          "declare_output",
+          "add_node",
+          "add_pin",
+          "connect",
+          "disconnect",
+          "set_default",
+          "set_position",
+          "remove_node"
+         ],
+         "description": "declare_input: name, type; a Module.<name> read on the script's Map Get (made if there is none), shown on the module's stack. declare_output: name, type; an Output.Module.<name> write on its Map Set. A name with a namespace (Particles.Position) is kept. add_node: kind, as, x, y and what the kind needs. add_pin: node, name, type, direction. connect and disconnect: from, to. set_default: pin, value. set_position: node, x, y. remove_node: node."
+        },
+        "kind": {
+         "type": "string",
+         "enum": [
+          "map_get",
+          "map_set",
+          "op",
+          "if",
+          "select",
+          "function"
+         ],
+         "description": "add_node: the node. map_get reads the map the script receives; map_set joins the chain before the output; op takes opName; select takes selectorType, options; function takes functionScriptPath; map_get, map_set, if and select take pins."
+        },
+        "as": {
+         "type": "string",
+         "description": "add_node: a name without dots for this batch's later operations."
+        },
+        "name": {
+         "type": "string",
+         "description": "Parameter or pin name."
+        },
+        "type": {
+         "type": "string",
+         "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat; any other is refused."
+        },
+        "node": {
+         "type": "string",
+         "description": "A node: its 'as' in this batch, its GUID, input or output."
+        },
+        "from": {
+         "type": "string",
+         "description": "The output pin: <node>.<pin>, e.g. inputs.Module.SamplePos (declare_input makes the Map Get named inputs, declare_output the Map Set named outputs). Types the engine can convert (Bool to Vector) get a conversion node, as in the editor; only impossible ones are refused."
+        },
+        "to": {
+         "type": "string",
+         "description": "The input pin: <node>.<pin>, e.g. mul.A."
+        },
+        "pin": {
+         "type": "string",
+         "description": "set_default: <node>.<pin>, an input."
+        },
+        "value": {
+         "type": "string",
+         "description": "set_default: the pin's value as the editor writes it: 1.5, true, 1,0,0."
+        },
+        "direction": {
+         "type": "string",
+         "enum": [
+          "input",
+          "output"
+         ],
+         "description": "add_pin: which side (default the side the node takes new pins on)."
+        },
+        "opName": {
+         "type": "string",
+         "description": "kind op: Numeric::Add, Numeric::Mul or a short form (Mul); get_niagara_scratch_module with listOps lists them. A numeric pin left unconnected on an op fails the compile, so wire both inputs of an op."
+        },
+        "functionScriptPath": {
+         "type": "string",
+         "description": "kind function: a function script's path, or a scratch function's name on this system."
+        },
+        "selectorType": {
+         "type": "string",
+         "enum": [
+          "Bool",
+          "Int"
+         ],
+         "description": "kind select: the selector (default Bool)."
+        },
+        "options": {
+         "type": "number",
+         "description": "kind select with an Int selector: how many options (default 2)."
+        },
+        "pins": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+           "name": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ]
+         },
+         "description": "add_node: pins to add now, each {name, type}. If and Select name their pins after the type in the editor's language (the name given is not kept), so read the names from the reply's nodes before connecting."
+        },
+        "x": {
+         "type": "number",
+         "description": "Graph X; omitted places it right of the last node."
+        },
+        "y": {
+         "type": "number",
+         "description": "Graph Y (default 0). Put pure ops below the row their result feeds."
+        }
+       }
+      },
+      "description": "Graph edits, in order. One that fails stops the batch; those before it stay applied, unsaved."
+     }
+    },
+    "required": [
+     "action",
+     "scriptName",
+     "operations"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The system's object path."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "The scratch script's name."
+     },
+     "scriptPath": {
+      "type": "string",
+      "description": "The scratch script's object path."
+     },
+     "nodes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "The graph: each {node (GUID), kind, title, x, y, pins [{name, direction, type, default, linkedTo}]}."
+     },
+     "aliases": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Each 'as' name of the batch, and input and output, with its node GUID. Later calls name nodes by GUID."
+     },
+     "operationsApplied": {
+      "type": "number",
+      "description": "How many operations ran."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "What the stack reports wrong after the edit."
+     },
+     "saved": {
+      "type": "boolean",
+      "description": "Whether the system was saved."
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Add a clamp input.",
+    "input": {
+     "action": "edit_niagara_scratch_module",
+     "systemPath": "/Game/FX/NS_Crowd",
+     "scriptName": "LateralOffset",
+     "operations": [
+      {
+       "op": "declare_input",
+       "name": "MaxOffset",
+       "type": "Float"
+      }
+     ]
+    },
+    "output": {
+     "success": true,
+     "message": "Scratch module edited.",
+     "scriptName": "LateralOffset"
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "non-idempotent",
+   "longRunning": false,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "edit_niagara_scratch_module"
+  }
+ },
+ {
+  "id": "manage_effect.apply_niagara_scratch_module",
+  "aliases": [
+   "manage_effect.compile_niagara_scratch_module"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara scratch",
+   "topics": [
+    "apply scratch",
+    "compile scratch module",
+    "compile errors niagara",
+    "应用暂存模块",
+    "编译暂存模块"
+   ],
+   "summary": "The Scratch Pad's Apply: refresh the stack calls of the system's scratch scripts (or just scriptName), compile the system, wait for it and report scratchScripts (each with the errors its nodes caused) and compiledScripts (every compiled script with errors or warnings, with status). compileOk false leaves the disk's copy alone (saved false); the call itself still succeeds. Saved otherwise unless save is false.",
+   "whenToUse": [
+    "After creating or editing a Scratch module: this is what makes its inputs appear and shows what is wrong with its graph."
+   ],
+   "whenNotToUse": [
+    "The system is not to be compiled yet: batch more edits first."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action to execute on the parent tool."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The Niagara system, e.g. /Game/FX/NS_Crowd."
+     },
+     "assetPath": {
+      "type": "string",
+      "description": "Same as systemPath."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "One scratch script; every one when omitted."
+     },
+     "save": {
+      "type": "boolean",
+      "description": "Save when it compiles clean (default true)."
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The system's object path."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "The scratch script's name."
+     },
+     "scriptPath": {
+      "type": "string",
+      "description": "The scratch script's object path."
+     },
+     "nodes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "The graph: each {node (GUID), kind, title, x, y, pins [{name, direction, type, default, linkedTo}]}."
+     },
+     "aliases": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Each 'as' name of the batch, and input and output, with its node GUID. Later calls name nodes by GUID."
+     },
+     "operationsApplied": {
+      "type": "number",
+      "description": "How many operations ran."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "What the stack reports wrong after the edit."
+     },
+     "saved": {
+      "type": "boolean",
+      "description": "Whether the system was saved."
+     },
+     "compileOk": {
+      "type": "boolean",
+      "description": "Whether every compiled script is free of errors."
+     },
+     "scratchScripts": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "Each scratch script: {scriptName, ok, errors}."
+     },
+     "compiledScripts": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "Each compiled script with something to say: {script, usage, status, errors, warnings}."
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Compile the system and read each script's errors.",
+    "input": {
+     "action": "apply_niagara_scratch_module",
+     "systemPath": "/Game/FX/NS_Crowd"
+    },
+    "output": {
+     "success": true,
+     "message": "Compiled without errors.",
+     "compileOk": true,
+     "saved": true
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "non-idempotent",
+   "longRunning": false,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "apply_niagara_scratch_module"
+  }
+ },
+ {
+  "id": "manage_effect.get_niagara_scratch_module",
+  "aliases": [
+   "manage_effect.list_niagara_scratch_modules"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara scratch",
+   "topics": [
+    "list scratch modules",
+    "read scratch graph",
+    "niagara ops list",
+    "查看暂存模块"
+   ],
+   "summary": "Read a system's Scratch scripts: every script with its owner (system, listed under Local Modules; or emitter:<name>, which runs but is not listed) and usage; scriptName adds that script's graph with node GUIDs, pins and wires. listOps adds the op names kind op takes.",
+   "whenToUse": [
+    "Before editing a Scratch module, or to see why a module is missing from Local Modules."
+   ],
+   "whenNotToUse": [
+    "A system's stack modules and their input values: use get_niagara_info."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action to execute on the parent tool."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The Niagara system, e.g. /Game/FX/NS_Crowd."
+     },
+     "assetPath": {
+      "type": "string",
+      "description": "Same as systemPath."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "The script whose graph to include."
+     },
+     "listOps": {
+      "type": "boolean",
+      "description": "Include the names of every op."
+     }
+    },
+    "required": [
+     "action"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "The system's object path."
+     },
+     "scriptName": {
+      "type": "string",
+      "description": "The scratch script's name."
+     },
+     "scriptPath": {
+      "type": "string",
+      "description": "The scratch script's object path."
+     },
+     "nodes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "The graph: each {node (GUID), kind, title, x, y, pins [{name, direction, type, default, linkedTo}]}."
+     },
+     "aliases": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Each 'as' name of the batch, and input and output, with its node GUID. Later calls name nodes by GUID."
+     },
+     "operationsApplied": {
+      "type": "number",
+      "description": "How many operations ran."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "What the stack reports wrong after the edit."
+     },
+     "saved": {
+      "type": "boolean",
+      "description": "Whether the system was saved."
+     },
+     "scripts": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "Each script: {scriptName, owner, usage, nodes}."
+     },
+     "ops": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "With listOps."
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Read one script's graph.",
+    "input": {
+     "action": "get_niagara_scratch_module",
+     "systemPath": "/Game/FX/NS_Crowd",
+     "scriptName": "LateralOffset"
+    },
+    "output": {
+     "success": true,
+     "message": "1 scratch script(s).",
+     "scripts": [
+      {
+       "scriptName": "LateralOffset",
+       "owner": "system",
+       "usage": "Module"
+      }
+     ]
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "read",
+   "idempotency": "idempotent",
+   "longRunning": false,
+   "safeToRetry": true
+  },
+  "policy": {
+   "requiredScope": "read",
+   "consent": "none",
+   "dataAccess": "project-read"
+  },
+  "cost": {
+   "latency": "instant",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "get_niagara_scratch_module"
+  }
+ }
+]

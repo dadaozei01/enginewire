@@ -20,7 +20,23 @@ bool FindModuleInput(UNiagaraNodeFunctionCall* Module, const FString& InputName,
         return false;
     }
     const FString Bare = BareInputName(InputName);
-    for (UEdGraphNode* Node : CalledGraph->Nodes)
+    // A Set Variables module's input keeps the whole variable name, Module.Particles.Position. A name left with such a
+    // namespace after any module prefix means exactly that input: its last part alone would read another module's
+    // Module.Position.
+    FString Relative = InputName;
+    if (!Relative.RemoveFromStart(TEXT("Module."), ESearchCase::IgnoreCase) &&
+        !Relative.RemoveFromStart(Module->GetFunctionName() + TEXT("."), ESearchCase::IgnoreCase) &&
+        Module->FunctionScript)
+    {
+        Relative.RemoveFromStart(Module->FunctionScript->GetName() + TEXT("."), ESearchCase::IgnoreCase);
+    }
+    const FString FirstPart = Relative.Left(Relative.Find(TEXT(".")));
+    const bool bVariableName = Relative.Contains(TEXT(".")) && (FirstPart.Equals(TEXT("Particles"), ESearchCase::IgnoreCase) ||
+        FirstPart.Equals(TEXT("Emitter"), ESearchCase::IgnoreCase) || FirstPart.Equals(TEXT("System"), ESearchCase::IgnoreCase) ||
+        FirstPart.Equals(TEXT("Engine"), ESearchCase::IgnoreCase) || FirstPart.Equals(TEXT("User"), ESearchCase::IgnoreCase) ||
+        FirstPart.Equals(TEXT("Local"), ESearchCase::IgnoreCase) || FirstPart.Equals(TEXT("Transient"), ESearchCase::IgnoreCase) ||
+        FirstPart.Equals(TEXT("StackContext"), ESearchCase::IgnoreCase) || FirstPart.Equals(TEXT("Output"), ESearchCase::IgnoreCase));
+    for (UEdGraphNode* Node : bVariableName ? TArray<UEdGraphNode*>() : TArray<UEdGraphNode*>(CalledGraph->Nodes))
     {
         UNiagaraNodeInput* InputNode = Cast<UNiagaraNodeInput>(Node);
         const FString Candidate = InputNode ? InputNode->Input.GetName().ToString() : FString();
@@ -32,15 +48,22 @@ bool FindModuleInput(UNiagaraNodeFunctionCall* Module, const FString& InputName,
             return true;
         }
     }
-    const FString ModuleForm = TEXT("Module.") + Bare;
-    for (UEdGraphNode* Node : CalledGraph->Nodes)
+    TArray<FString> ModuleForms{TEXT("Module.") + Relative};
+    if (!bVariableName)
     {
-        for (UEdGraphPin* Pin : Node->Pins)
+        ModuleForms.AddUnique(TEXT("Module.") + Bare);
+    }
+    for (const FString& ModuleForm : ModuleForms)
+    {
+        for (UEdGraphNode* Node : CalledGraph->Nodes)
         {
-            if (Pin->Direction == EGPD_Output && Pin->PinName.ToString().Equals(ModuleForm, ESearchCase::IgnoreCase))
+            for (UEdGraphPin* Pin : Node->Pins)
             {
-                OutInput = FNiagaraVariable(UEdGraphSchema_Niagara::PinToTypeDefinition(Pin), Pin->PinName);
-                return true;
+                if (Pin->Direction == EGPD_Output && Pin->PinName.ToString().Equals(ModuleForm, ESearchCase::IgnoreCase))
+                {
+                    OutInput = FNiagaraVariable(UEdGraphSchema_Niagara::PinToTypeDefinition(Pin), Pin->PinName);
+                    return true;
+                }
             }
         }
     }
@@ -145,10 +168,16 @@ UNiagaraNodeFunctionCall* ResolveDynamicInputTargetNode(
     int32 DotIndex = INDEX_NONE;
     if (ModuleName.IsEmpty() && InputName.FindChar(TEXT('.'), DotIndex))
     {
+        // Only a module's name is a module prefix: Particles.Position is itself a Set Variables input's name.
         const FString Prefix = InputName.Left(DotIndex);
-        if (!Prefix.Equals(TEXT("Module"), ESearchCase::IgnoreCase))
+        for (const UNiagaraNodeFunctionCall* Module : Modules)
         {
-            ModuleName = Prefix;
+            if (Module->GetFunctionName().Equals(Prefix, ESearchCase::IgnoreCase) ||
+                (Module->FunctionScript && Module->FunctionScript->GetName().Equals(Prefix, ESearchCase::IgnoreCase)))
+            {
+                ModuleName = Prefix;
+                break;
+            }
         }
     }
 

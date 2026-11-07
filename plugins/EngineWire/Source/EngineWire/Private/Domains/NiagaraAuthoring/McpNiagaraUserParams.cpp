@@ -91,22 +91,21 @@ bool AddPlacedUserParameters(FActionContext& Context, UNiagaraSystem* System)
 
 FNiagaraTypeDefinition ResolveNiagaraTypeByName(const FString& ParamType)
 {
-    if (ParamType.Equals(TEXT("Int"), ESearchCase::IgnoreCase) || ParamType.Equals(TEXT("Integer"), ESearchCase::IgnoreCase))
-    {
-        return FNiagaraTypeDefinition::GetIntDef();
-    }
-    if (ParamType.Equals(TEXT("Bool"), ESearchCase::IgnoreCase) || ParamType.Equals(TEXT("Boolean"), ESearchCase::IgnoreCase))
-    {
-        return FNiagaraTypeDefinition::GetBoolDef();
-    }
-    if (ParamType.Equals(TEXT("Vector"), ESearchCase::IgnoreCase) || ParamType.Equals(TEXT("Vec3"), ESearchCase::IgnoreCase))
-    {
-        return FNiagaraTypeDefinition::GetVec3Def();
-    }
-    if (ParamType.Equals(TEXT("LinearColor"), ESearchCase::IgnoreCase) || ParamType.Equals(TEXT("Color"), ESearchCase::IgnoreCase))
-    {
-        return FNiagaraTypeDefinition::GetColorDef();
-    }
-    return FNiagaraTypeDefinition::GetFloatDef();
+    const auto Is = [&ParamType](const TCHAR* Name) { return ParamType.Equals(Name, ESearchCase::IgnoreCase); };
+    if (Is(TEXT("Float"))) return FNiagaraTypeDefinition::GetFloatDef();
+    if (Is(TEXT("Int")) || Is(TEXT("Integer")) || Is(TEXT("Int32"))) return FNiagaraTypeDefinition::GetIntDef();
+    if (Is(TEXT("Bool")) || Is(TEXT("Boolean"))) return FNiagaraTypeDefinition::GetBoolDef();
+    if (Is(TEXT("Vector")) || Is(TEXT("Vec3")) || Is(TEXT("Vector3"))) return FNiagaraTypeDefinition::GetVec3Def();
+    if (Is(TEXT("Vector2")) || Is(TEXT("Vec2"))) return FNiagaraTypeDefinition::GetVec2Def();
+    if (Is(TEXT("Vector4")) || Is(TEXT("Vec4"))) return FNiagaraTypeDefinition::GetVec4Def();
+    if (Is(TEXT("LinearColor")) || Is(TEXT("Color"))) return FNiagaraTypeDefinition::GetColorDef();
+    if (Is(TEXT("Position"))) return FNiagaraTypeDefinition::GetPositionDef();
+    if (Is(TEXT("Quat")) || Is(TEXT("Quaternion"))) return FNiagaraTypeDefinition::GetQuatDef();
+    return FNiagaraTypeDefinition();
+}
+
+const TCHAR* NiagaraTypeNamesHelp()
+{
+    return TEXT("Use Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat.");
 }
 }

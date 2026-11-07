@@ -16,7 +16,13 @@ static bool AddUserParameter(FActionContext& Context)
         Context.SendError(TEXT("Missing 'parameterName'."), TEXT("INVALID_ARGUMENT"));
         return true;
     }
-    System->GetExposedParameters().AddParameter(FNiagaraVariable(ResolveNiagaraTypeByName(ParamType), FName(*ParamName)), true);
+    const FNiagaraTypeDefinition Type = ResolveNiagaraTypeByName(ParamType);
+    if (!Type.IsValid())
+    {
+        Context.SendError(FString::Printf(TEXT("Unknown parameterType '%s'. %s Nothing was changed."), *ParamType, NiagaraTypeNamesHelp()), TEXT("INVALID_ARGUMENT"));
+        return true;
+    }
+    System->GetExposedParameters().AddParameter(FNiagaraVariable(Type, FName(*ParamName)), true);
     MarkDirtyAndVerify(Context, System);
     Context.Result->SetStringField(TEXT("parameterName"), ParamName);
     Context.Result->SetStringField(TEXT("parameterType"), ParamType);
@@ -107,12 +113,18 @@ static bool BindParameterToSource(FActionContext& Context)
         return true;
     }
     FString InputName = ParamName;
-    FNiagaraTypeDefinition Type = ResolveNiagaraTypeByName(GetJsonStringField(Context.Payload, TEXT("parameterType"), TEXT("Float")));
+    const FString TypeName = GetJsonStringField(Context.Payload, TEXT("parameterType"), TEXT("Float"));
+    FNiagaraTypeDefinition Type = ResolveNiagaraTypeByName(TypeName);
     if (bModuleInput)
     {
         InputName = Input.GetName().ToString();
         InputName.RemoveFromStart(TEXT("Module."));
         Type = Input.GetType();
+    }
+    else if (!Type.IsValid())
+    {
+        Context.SendError(FString::Printf(TEXT("Unknown parameterType '%s'. %s Nothing was changed."), *TypeName, NiagaraTypeNamesHelp()), TEXT("INVALID_ARGUMENT"));
+        return true;
     }
     // An unknown user parameter would compile to its type's default without a word.
     if (SourceBinding.StartsWith(TEXT("User.")))

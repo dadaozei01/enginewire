@@ -78,4 +78,16 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    未验证：编辑器目录安装；Fracture 和 PlanarCut 真正缺失时的启动。在 `.uproject` 中禁用后，ChaosEditor 等引擎插件的必需依赖仍会挂载它们；dylib 直接链接这两个模块。内容浏览器缩略图打开时切割也未专门测试。其他写入功能首次使用后需检查结果。
 
+19. Niagara 系统级 Scratch 模块（2026-11-07，UE 5.8 Mac）：新增 `create/edit/apply/get_niagara_scratch_module`，脚本存入 `System.ScratchPadScripts`，所以出现在「本地模块」。代码在 `Domains/NiagaraAuthoring/McpNiagaraScratch.cpp`，能力记录在 `MCP/Extensions/niagara-scratch.capabilities.json`，只在 UE 5.8 编译，其他版本返回 NOT_SUPPORTED。
+
+   NiagaraEditor 没有导出 Map Get/Set、If、Select 的节点类和 `RequestNewTypedPin`，插件用反射按名字取类和属性，用虚函数指针调用 `OnNewTypedPinAdded`，不改引擎，不新增模块。新引脚总排在 Add 引脚之前，第二版 Custom HLSL 也要走这条路，否则会重现按引脚下标越界的闪退。
+
+   同时修复：`add_spawn_burst_module` 改到 Emitter Update；用户参数和绑定支持 Position、Quat，未知类型报错；`set_dynamic_input` 能接上 Set Variables 的输入。
+
+   已实测（工程目录安装）：在复制出的测试系统里重建 `CrowdLateralOffset`（SamplePos + RightVec * Lateral 写入 Particles.Position），绑定输入后编译通过并保存，模块列在「本地模块」，双击能打开图表（系统级与发射器级同名时也可以），系统编辑器打开不崩，预览中粒子的横向队列与原系统一致；另一个测试系统覆盖 If、Select、函数节点和六种声明类型；连线缺失时编译错误能归到对应脚本且不保存；未知类型、未知运算会报错；上述三个修复的结果。
+
+   已知情况：系统编辑器开着时写入返回 SYSTEM_EDITOR_OPEN；声明输入不能带默认值，用 `set_parameter_value` 设；If、Select 的引脚名随编辑器语言变化，要从回复里读；可转换的类型连线会被引擎自动插入转换节点。校验 `NS_ScratchFlow` 时引擎堆栈 UI 对 Sample Spline 的 Distance Distribution Mode 报过一次重复子项 ensure，与 Scratch 无关，但未确认原系统是否同样触发。
+
+   未验证：Windows；运行关卡（PIE）中的粒子位置，以上位置结论来自预览对照，不是数值比对。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

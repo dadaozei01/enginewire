@@ -39,7 +39,7 @@ struct FFixedModule
 
 static const FFixedModule FixedModules[] = {
     {TEXT("add_spawn_rate_module"), TEXT("/Niagara/Modules/Emitter/SpawnRate.SpawnRate"), ENiagaraScriptUsage::EmitterUpdateScript, TEXT("SpawnRate")},
-    {TEXT("add_spawn_burst_module"), TEXT("/Niagara/Modules/Emitter/SpawnBurst_Instantaneous.SpawnBurst_Instantaneous"), ENiagaraScriptUsage::EmitterSpawnScript, TEXT("SpawnBurst")},
+    {TEXT("add_spawn_burst_module"), TEXT("/Niagara/Modules/Emitter/SpawnBurst_Instantaneous.SpawnBurst_Instantaneous"), ENiagaraScriptUsage::EmitterUpdateScript, TEXT("SpawnBurst")},
     {TEXT("add_spawn_per_unit_module"), TEXT("/Niagara/Modules/Emitter/SpawnPerUnit.SpawnPerUnit"), ENiagaraScriptUsage::EmitterUpdateScript, TEXT("SpawnPerUnit")},
     {TEXT("add_initialize_particle_module"), nullptr, ENiagaraScriptUsage::ParticleSpawnScript, TEXT("InitializeParticle")},
     {TEXT("add_particle_state_module"), TEXT("/Niagara/Modules/Update/Lifetime/ParticleState.ParticleState"), ENiagaraScriptUsage::ParticleUpdateScript, TEXT("ParticleState")},

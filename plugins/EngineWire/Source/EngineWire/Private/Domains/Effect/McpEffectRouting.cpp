@@ -68,7 +68,11 @@ bool IsNiagaraAuthoringSubAction(const FString& SubAction)
         TEXT("enable_gpu_simulation"),
         TEXT("add_simulation_stage"),
         TEXT("get_niagara_info"),
-        TEXT("validate_niagara_system")};
+        TEXT("validate_niagara_system"),
+        TEXT("create_niagara_scratch_module"),
+        TEXT("edit_niagara_scratch_module"),
+        TEXT("apply_niagara_scratch_module"),
+        TEXT("get_niagara_scratch_module")};
     return NiagaraAuthoringActions.Contains(SubAction);
 }
 

@@ -55,6 +55,7 @@ bool UEngineWireSubsystem::HandleManageNiagaraAuthoringAction(
     if (McpNiagaraAuthoringHandlers::HandleEventAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleSimulationAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleInfoValidationAction(Context, SubAction)) return true;
+    if (McpNiagaraAuthoringHandlers::HandleScratchAction(Context, SubAction)) return true;
 
     SendAutomationError(RequestingSocket, RequestId, FString::Printf(TEXT("Unknown subAction: %s"), *SubAction), TEXT("INVALID_SUBACTION"));
     return true;

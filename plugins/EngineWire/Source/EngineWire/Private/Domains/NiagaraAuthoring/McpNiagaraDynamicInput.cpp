@@ -60,7 +60,6 @@ static bool SetNiagaraDynamicInput(FActionContext& Context)
     // Module inputs are stored as "Module.<Name>" while the stack addresses them through the
     // aliased "<FunctionName>.<Name>" handle, so accept the bare name, either spelling, and
     // build the aliased handle from the resolved module exactly as the stack does.
-    const FNiagaraParameterHandle AliasedHandle(FName(*TargetNode->GetFunctionName()), FName(*BareInputName(InputName)));
     FNiagaraVariable MatchedInput;
     if (!FindModuleInput(TargetNode, InputName, MatchedInput))
     {
@@ -68,6 +67,11 @@ static bool SetNiagaraDynamicInput(FActionContext& Context)
         return true;
     }
     const FNiagaraTypeDefinition InputType = MatchedInput.GetType();
+    // From the input actually found, so Module.Particles.Position stays <Function>.Particles.Position, as the stack has it.
+    const FNiagaraParameterHandle MatchedHandle(MatchedInput.GetName());
+    const FNiagaraParameterHandle AliasedHandle = MatchedHandle.IsModuleHandle()
+        ? FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(MatchedHandle, TargetNode)
+        : FNiagaraParameterHandle(FName(*TargetNode->GetFunctionName()), FName(*BareInputName(InputName)));
 
     FNiagaraTypeDefinition DIOutputType;
     bool bFoundDIOutputType = false;
