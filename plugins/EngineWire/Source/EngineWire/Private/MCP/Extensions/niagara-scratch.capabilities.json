@@ -18,7 +18,7 @@
     "custom hlsl",
     "niagara hlsl"
    ],
-   "summary": "Make a Scratch module on a Niagara system: its script lives in System.ScratchPadScripts, the list the system editor shows under Local Modules (a script on an emitter runs but never shows there). Goes on the stage's stack (emitterName unless a System stage; addToStack false leaves it unused) with no inputs yet; operations can build its graph in the same call. Nothing is compiled or saved until apply_niagara_scratch_module. An open editor of the system is refused (SYSTEM_EDITOR_OPEN), a taken name is NAME_TAKEN.",
+   "summary": "Make a Scratch module on a Niagara system: its script lives in System.ScratchPadScripts, the list the system editor shows under Local Modules (a script on an emitter runs but never shows there). Goes on the stage's stack (emitterName unless a System stage; addToStack false leaves it unused) with no inputs yet; operations can build its graph in the same call. Nothing is compiled or saved until apply_niagara_scratch_module. An open editor of the system is refused (SYSTEM_EDITOR_OPEN), a taken name is NAME_TAKEN. Scratch input pins can carry concrete data-interface types; creating/configuring their instances is not included.",
    "whenToUse": [
     "A particle needs logic no stock module has: a module with its own inputs and a graph of map reads, ops, branches and function calls."
    ],
@@ -117,7 +117,7 @@
         },
         "type": {
          "type": "string",
-         "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat; any other is refused."
+         "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
         },
         "node": {
          "type": "string",
@@ -177,7 +177,8 @@
             "type": "string"
            },
            "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
            }
           },
           "required": [
@@ -201,7 +202,8 @@
             "type": "string"
            },
            "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
            }
           },
           "required": [
@@ -209,7 +211,7 @@
            "type"
           ]
          },
-         "description": "kind custom_hlsl: input pins, each {name, type}. A name the engine would change (a space, a reserved word, one used on either side of the node) is refused."
+         "description": "kind custom_hlsl: input pins, each {name, type}. A name the engine would change (a space, a reserved word, one used on either side of the node) is refused. Data interfaces are accepted as inputs by class name (NiagaraDataInterfaceArrayFloat or ArrayFloat)."
         },
         "outputs": {
          "type": "array",
@@ -221,7 +223,8 @@
             "type": "string"
            },
            "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
            }
           },
           "required": [
@@ -229,7 +232,7 @@
            "type"
           ]
          },
-         "description": "kind custom_hlsl: output pins, each {name, type}. Same naming rules as inputs."
+         "description": "kind custom_hlsl: output pins, each {name, type}. Same naming rules as inputs. Data interfaces are explicitly refused."
         },
         "x": {
          "type": "number",
@@ -465,7 +468,7 @@
     "custom hlsl",
     "niagara hlsl"
    ],
-   "summary": "Edit a system Scratch module's graph with a batch of operations: declare inputs and outputs, add Map Get, Map Set, op, If, Select, function and Custom HLSL nodes, add pins, connect, disconnect, set pin values, move and remove nodes. Types are checked by the engine's own connection rules. Compile with apply_niagara_scratch_module afterwards; an open editor of the system is refused.",
+   "summary": "Edit a system Scratch module's graph with a batch of operations: declare inputs and outputs, add Map Get, Map Set, op, If, Select, function and Custom HLSL nodes, add pins, connect, disconnect, set pin values, move and remove nodes. Types are checked by the engine's own connection rules. Compile with apply_niagara_scratch_module afterwards; an open editor of the system is refused. Scratch input pins can carry concrete data-interface types; creating/configuring their instances is not included.",
    "whenToUse": [
     "A Scratch module made by create_niagara_scratch_module needs another input, node or wire."
    ],
@@ -544,7 +547,7 @@
         },
         "type": {
          "type": "string",
-         "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat; any other is refused."
+         "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
         },
         "node": {
          "type": "string",
@@ -604,7 +607,8 @@
             "type": "string"
            },
            "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
            }
           },
           "required": [
@@ -628,7 +632,8 @@
             "type": "string"
            },
            "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
            }
           },
           "required": [
@@ -636,7 +641,7 @@
            "type"
           ]
          },
-         "description": "kind custom_hlsl: input pins, each {name, type}. A name the engine would change (a space, a reserved word, one used on either side of the node) is refused."
+         "description": "kind custom_hlsl: input pins, each {name, type}. A name the engine would change (a space, a reserved word, one used on either side of the node) is refused. Data interfaces are accepted as inputs by class name (NiagaraDataInterfaceArrayFloat or ArrayFloat)."
         },
         "outputs": {
          "type": "array",
@@ -648,7 +653,8 @@
             "type": "string"
            },
            "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat. Module inputs (Map Get) and custom_hlsl input pins also accept a loaded concrete Niagara data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces are refused for declare_output, Custom HLSL outputs and op/if/select. This declares types only; assigning/configuring interface instances is not provided."
            }
           },
           "required": [
@@ -656,7 +662,7 @@
            "type"
           ]
          },
-         "description": "kind custom_hlsl: output pins, each {name, type}. Same naming rules as inputs."
+         "description": "kind custom_hlsl: output pins, each {name, type}. Same naming rules as inputs. Data interfaces are explicitly refused."
         },
         "x": {
          "type": "number",

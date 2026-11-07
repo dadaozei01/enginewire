@@ -96,10 +96,30 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    已实测（工程目录安装）：复制 `NS_ScratchFlow` 为测试系统，用 HLSL 重写横向偏移模块，编译通过并保存；用户对照新旧两个系统的预览无异常，系统编辑器打开、双击打开图表、重启后从磁盘加载都不崩，代码和引脚保留；脚本统计中生成和更新脚本的操作数与原系统一致。另测：非法引脚名和节点两侧重名被拒绝并带引擎建议的名字，失败不留节点，语法错误不保存，已连线节点上加引脚和 `set_hlsl` 后连线与默认值保留，未连线的输入引脚可用默认值。
 
-   已知情况：不支持 Map 类型和数据接口类型的引脚，也不能删除或改名引脚（删节点重建）。VM 编译错误不带节点信息，所以语法错误只出现在 `compiledScripts` 且 `compileOk` 为 false，`scratchScripts` 仍显示 ok。
+   已知情况：不支持 Map 类型引脚；数据接口输入支持见第 21 项，也不能删除或改名引脚（删节点重建）。VM 编译错误不带节点信息，所以语法错误只出现在 `compiledScripts` 且 `compileOk` 为 false，`scratchScripts` 仍显示 ok。
 
    引擎问题，与本项无关：打开使用 Sample Spline 的系统并编译时，`NiagaraStackEntry.cpp:832` 报 `Duplicate child Distance Distribution Mode`，堆栈中没有本插件；ensure 拉起的 `CrashReportClientEditor` 退出时又在 `FScheduler::StopWorkers` 崩溃，弹出系统崩溃窗口，编辑器不受影响。两者都在引擎内，本仓库不改引擎。Mac 编辑器读偏好设置 `bSendUnattendedBugReports`，关闭后 ensure 不再拉起报告程序。
 
-   未验证：Windows；粒子位置的数值比对（Python 读不到位置，结论来自预览对照）；未在未经 Scratch 修改的系统上单独复现上述 ensure。
+   数值对照已实测（scratch-7，编辑器世界）：HLSL 的 `NS_ScratchHlsl` 与 `NS_ScratchFlow` 各 31 个粒子，同样推进 120 × 0.0333 秒后 age 均为 3.9959964752；Y、Z 均为 0，X 范围分别约为 -373 到 355、-376 到 378，均值分别约为 25.010115、-26.279506。未固定随机种子，只能记为本次样本分布相近，不是逐粒子比对，不能据此证明两系统严格等价。未验证：Windows；固定随机种子的逐粒子数值对照；未在未经 Scratch 修改的系统上单独复现上述 ensure。
+
+21. Niagara Scratch 数据接口输入类型（2026-11-07，UE 5.8 Mac）：仅 Scratch 的解析器先调用共用 `ResolveNiagaraTypeByName`，再查已加载的非抽象 `UNiagaraDataInterface` 子类，支持完整类名和省略 `NiagaraDataInterface` 前缀（`NiagaraDataInterfaceArrayFloat` / `ArrayFloat`），不加载额外插件。未知、抽象、重名类均拒绝。类型用 `FNiagaraTypeDefinition(UClass*)`；CDO 的 `PostInitProperties` 负责类型选择 flags（Array 基类为 AllowAnyVariable | AllowParameter），再以 `FNiagaraTypeRegistry::Register(Type, None)` 保证注册而不扩大原 flags。共用用户参数解析器不变。
+
+   仅 Map Get 输出（模块输入）和 Custom HLSL 输入接受数据接口；`declare_output`、Custom HLSL 输出、Map Set、op/if/select 拒绝。继续走第 19、20 项的 AddTypedPin、反射与虚函数路径，没有新增 NiagaraEditor 未导出符号调用。
+
+   已实测（UE 5.8.4 Mac，工程目录安装）：`ArrayFloat` 可声明 Module.Arr 并连接 Custom HLSL 的 Arr 输入；未手动赋值/配置接口实例，`Arr.Length(Count);` 的首次 apply 为 compileOk true、compiledScripts 空。declare_output ArrayFloat、Custom HLSL 输出 ArrayFloat、Map Set 的 DI 引脚、declare_input/declare_output NoSuchType 和抽象 NiagaraDataInterface 均被拒绝；抽象基类报 Unknown type，未单独说明抽象原因。scratch-6 再测 Map Set 的 ArrayFloat、NoSuchType，两次都拒绝，节点数 5 → 5，完整图和 Map 链不变。
+
+   运行验证（scratch-7，编辑器世界）：只修改 `NS_DiTest`。确认 Crowd 的 HlslDiTest 已启用且在 Particle Update 栈末尾；断开 Count → Particles.DiTestCount，增加 Result（Position），代码改为 `Arr.Length(Count); Result = float3(0, 0, 1000.0 + Count);`，Result 写入 Particles.Position。apply 为 compileOk true、compiledScripts 空，保存成功；未手动赋接口实例。临时 Actor 激活并推进 120 × 0.0333 秒后读回 31/31 个粒子，age 3.9959964752、localSpaceEmitter false，全部 Position 为 (0,0,1000)，Z 最小值、最大值均恰好为 1000。按此测试判据，ArrayFloat 的 Length 调用已运行且返回空数组长度 0。本轮没有重试调整；临时 Actor 已删除，未保存关卡。此前 DiTestCount 读不到时只说明该属性不在当前编译缓冲中，未单独证明原因是编译优化；本次改写 Position 后验证了函数结果。
+
+   已知情况：声明数据接口输入时会出现 `ResetVariableToDefaultValue called, but failed on var Arr type NiagaraDataInterfaceArrayFloat.` 警告，本次未阻止编译和运行，日志无新增 Ensure、Fatal、Array index out of bounds 或 Sample Spline Duplicate child。接口只声明类型，不提供手动创建、赋值、配置接口实例的能力；本次没有追踪引擎自动创建/提供默认实例的内部过程，不能将“未手动赋值也可用的空 ArrayFloat”推广到所有数据接口。源码核对：Map Get 的默认引脚对接口不分配普通值，字符串默认值不能配置接口；堆栈 `UNiagaraStackFunctionInput::SetDataInterfaceValue` 创建 override pin，`SetDataInterfaceValueForFunctionInput` 创建拥有接口对象的 NiagaraNodeInput 并连接，5.8 external 编辑还通过 placeholder manager 同步。未验证：非空数组数据赋值/配置、其他 DI 类、完整类名作为请求 type 的单独用例、op/if/select 的 DI 负面实测、接口实例绑定、PIE、Windows。
+
+22. 关卡 Niagara CPU 粒子快照（2026-11-07，UE 5.8 Mac）：新增只读能力 `get_niagara_particle_data`，源码 `McpNiagaraParticleData.cpp`，Extensions 独立记录并由生成器注册。`actorName`、`emitterName`、`attributes` 必填，`maxParticles` 默认 100、范围 1–2000；可显式传 `advanceTicks`（0–10000）、`tickDeltaSeconds`（大于 SMALL_NUMBER、至多 1 秒，默认 1/60），后者不能单独传。effect 为 read；显式推进会改变瞬时模拟状态，因此记录为非幂等、不可安全重试，不保存资产。
+
+   读取路径：游戏线程选 PIE PlayWorld，否则编辑器世界；按精确 label/object name/path 匹配并拒绝歧义，Actor 必须只有一个 Niagara 组件。通过组件 controller 的内联 `GetSystemInstance_Unsafe()` 取得实例，调用已导出的 `WaitForConcurrentTickDoNotFinalize()` 等待系统与实例并行任务；不 finalize、不激活、不重置、不 tick。然后 GetEmitters → emitter GetParticleData → GetCurrentData，用引擎 typed dataset reader 读 Float/Int/Bool/Vector2/Vector/Vector4/Color/Position/Quat，返回真实总数和截断数量；属性接受有/无 Particles. 前缀。GPU/stateless 在读取前返回 NOT_SUPPORTED，不做假 CPU 读回；无实例、未激活分别说明；已完成实例返回 SYSTEM_COMPLETE，未请求推进且 pending-first-tick/无缓冲返回 NO_SIMULATION_DATA，并提示传 advanceTicks 或在 PIE 中读取，Actor/组件/发射器/属性缺失列出可用名字。
+
+   线程安全与推进：整个快照在同步游戏线程调用内完成，不留出 raw buffer；等待函数不触发完成回调。只有 advanceTicks > 0 调用导出的 `UNiagaraComponent::AdvanceSimulation`（引擎内部等待/finalize、临时 Solo、同步 ManualTick、恢复 Solo）；暂停则拒绝。scratch-7 修复：推进前只检查激活、有效 controller/实例、未完成、未暂停，pending spawn 或无当前缓冲不提前报错；已有缓冲时先验证目标发射器、CPU 类型和可读属性，否则推进后完整验证。源码确认 `SetSolo` 可转移 PendingSpawn，`ManualTick` 进入 `FNiagaraSystemSimulation::Tick_GameThread_Internal` 后处理 pending 队列并转成 Running；编译/执行未就绪时仍可能不前进，由现有 age 检查报告。网关会提前注入 schema default，因此移除 advanceTicks 与 tickDeltaSeconds 的 schema 默认值（C++ 默认 0、1/60 不变），保留单传 tickDeltaSeconds 的 INVALID_ARGUMENT 检查。scratch-7 编辑器世界的推进读取已实测通过。推进后重新取得弱组件、controller、实例、发射器和缓冲，对比实例 ID、系统 age，拒绝替换实例或没有实际推进。推进可能完成/回收系统，之后失败不回滚，调用者不可盲目重试。本项没有使用新的未导出 NiagaraEditor 函数；快照访问器内联，等待和 LWC 函数有 NIAGARA_API。
+
+   Position 通过 `GetLWCSimToWorld(IsLocalSpace)` 变换，包含世界发射器 LWC tile 和局部发射器变换，输出世界空间、UE 单位；其余向量保留模拟空间，Quat 顺序 xyzw，Color rgba。索引只在同次快照各属性之间对应，不是跨调用稳定粒子 ID；编译优化移除的属性无法读取，列可用属性；无效 reader/非有限数值报错，不填零。未验证：PIE 及 PIE/编辑器世界选择对照、局部空间发射器、远离原点的 LWC、GPU/stateless 发射器的 NOT_SUPPORTED 实测、其余支持类型的逐项读取、异步压力、完成/池化回调、暂停/完成状态错误的单独实测、Windows。编译结果以本次任务回报为准，不将编译通过当成实测。
+
+   已实测（scratch-7，BP_Test 5.8.4 Mac，非 PIE 编辑器世界）：新激活的 NS_ScratchHlsl 临时组件不传 advanceTicks 时返回 NO_SIMULATION_DATA，并提示传 advanceTicks > 0 或在 PIE 中读取；同一组件传 120 ticks、0.0333 秒后成功返回 Position/Velocity，总数和返回数均 31、age 3.9959964752、localSpaceEmitter false。随后两次不推进读取的 age、particleCount 均相同；maxParticles=5 返回 5 个，总数仍为 31。NS_ScratchFlow 同样推进成功且 age/数量一致，位置分布对照见第 20 项。不存在发射器返回 EMITTER_NOT_FOUND 并列 Crowd，不存在属性返回 ATTRIBUTE_NOT_FOUND 并列可用属性，单传 tickDeltaSeconds 返回 INVALID_ARGUMENT。三个临时 Actor 全部删除并列表确认 0，未保存关卡，未写入四个受保护原系统；日志增量无 Ensure、Fatal、Array index out of bounds 或 Duplicate child。NS_DiTest 的空 ArrayFloat 运行验证见第 21 项。
 
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

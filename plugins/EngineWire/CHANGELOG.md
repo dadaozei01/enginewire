@@ -7,7 +7,10 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 ## [Unreleased]
 
 ### Added (Niagara scratch modules, UE 5.8 fork)
-- `create_niagara_scratch_module`, `edit_niagara_scratch_module`, `apply_niagara_scratch_module` and `get_niagara_scratch_module` author system-level Scratch modules: the script is kept in `System.ScratchPadScripts`, so it is listed under Local Modules. A graph takes module inputs and outputs, Map Get/Set, op, If, Select and function nodes; apply compiles the system and reports errors per script. Custom HLSL and data interface function nodes are not included yet.
+- Scratch-only type resolution accepts concrete loaded Niagara data-interface class names (e.g. `NiagaraDataInterfaceArrayFloat` / `ArrayFloat`) for module and Custom HLSL inputs. Interface outputs and op/if/select pins are refused. Shared user-parameter behavior is unchanged. Instance assignment/configuration is not included. Runtime/editor testing: 未验证.
+- `get_niagara_particle_data` reads live stateful CPU particle attributes via the system instance and current dataset buffer on the game thread after waiting for concurrent simulation. Reports total/returned counts, supports nine value types and converts Position to world space with LWC/local transforms. PIE is preferred; ambiguous actors/components and GPU emitters are refused. Optional explicit `advanceTicks`/`tickDeltaSeconds` use synchronous AdvanceSimulation (no advance when omitted). No assets saved. Runtime/editor testing: 未验证.
+
+- `create_niagara_scratch_module`, `edit_niagara_scratch_module`, `apply_niagara_scratch_module` and `get_niagara_scratch_module` author system-level Scratch modules: the script is kept in `System.ScratchPadScripts`, so it is listed under Local Modules. A graph takes module inputs and outputs, Map Get/Set, op, If, Select and function nodes; apply compiles the system and reports errors per script. Data interface function nodes are not included yet.
 
 - Scratch modules take Custom HLSL nodes: `add_node` with `kind: custom_hlsl` (`hlsl`, `inputs`, `outputs`), `set_hlsl` to replace the code, and the code in `get_niagara_scratch_module`. Pins stay before the Add pin and in step with the node's signature; a pin name the engine would change is refused.
 

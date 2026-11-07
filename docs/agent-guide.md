@@ -43,7 +43,7 @@
 - 改蓝图逻辑先用 manage_blueprint 的 read_graph_as_code 读成文本，改完用 write_graph_from_code 写回（Epic 5.8 蓝图 DSL 文本格式，0.6.0 起），少用逐节点建线；改完 compile 并检查无用节点。本仓库已修复中文界面、多输出函数、运算节点等读写问题（UPSTREAM.md 第 8–15 项）；写回时保留读出的 `; id` 注释，菜单里没有的节点（如 SpawnActor<蓝图类>）靠它复用原节点，去掉注释会被整体拒绝。写入失败会整体拒绝，不会写坏蓝图。
 - Niagara：create_effect 建拖尾后读回 SpawnRate.SpawnRate，若为 0 用 set_parameter_value 重设；跟随拖尾（LocationBasedRibbon）的发射器静止且粒子无速度时长度为 0、看不到。看特效以 PIE 画面为准，截图回执里"视口不是实时"的提示在 PIE 下也会出现。用户开着某资产的 Niagara 编辑器时，其副本保存会覆盖 MCP 写入。
 
-- Niagara Scratch（UE 5.8）：要写自定义模块用 create_niagara_scratch_module 建在系统上（才会出现在「本地模块」），edit 改图，apply 编译并读逐脚本错误，get 读图。先关掉该系统的 Niagara 编辑器。运算节点的两个数字输入都要连线，否则编译失败。Custom HLSL 用 add_node 的 kind custom_hlsl（hlsl、inputs、outputs），改代码用 set_hlsl：引脚名就是变量名，区分大小写，输出直接赋值、不写 return；属性和模块输入经 Map Get 连到输入引脚，输出连到 Map Set；引擎会改写的名字（含空格、保留字、节点两侧重名）直接被拒绝。HLSL 语法错误只出现在 apply 的 compiledScripts，判断成败看 compileOk，scratchScripts 仍显示 ok。数据接口函数节点还没有。
+- Niagara Scratch（UE 5.8）：要写自定义模块用 create_niagara_scratch_module 建在系统上（才会出现在「本地模块」），edit 改图，apply 编译并读逐脚本错误，get 读图。先关掉该系统的 Niagara 编辑器。运算节点的两个数字输入都要连线，否则编译失败。Custom HLSL 用 add_node 的 kind custom_hlsl（hlsl、inputs、outputs），改代码用 set_hlsl：引脚名就是变量名，区分大小写，输出直接赋值、不写 return；属性和模块输入经 Map Get 连到输入引脚，输出连到 Map Set；引擎会改写的名字（含空格、保留字、节点两侧重名）直接被拒绝。HLSL 语法错误只出现在 apply 的 compiledScripts，判断成败看 compileOk，scratchScripts 仍显示 ok。数据接口函数节点还没有。Scratch 模块输入和 Custom HLSL 输入现在可用 `NiagaraDataInterfaceArrayFloat` / `ArrayFloat` 等已加载的具体数据接口类名；输出和 op/if/select 不支持。接口只声明类型，不提供手动创建或配置实例的能力。已实测：未手动赋实例的 ArrayFloat 输入可编译；HlslDiTest 位于 Particle Update 栈末尾并启用，用 `Arr.Length(Count); Result = float3(0, 0, 1000.0 + Count);` 写入 Particles.Position，推进后 31 个粒子的 Z 全部恰好为 1000，表明此空数组 Length 调用运行并返回 0。ResetVariableToDefaultValue failed 警告未阻止本次编译/运行。DI 输出、未知类型及抽象基类拒绝；Map Set 非法类型的回归测试节点数和 Map 链不变。未验证：非空数组赋值、其他 DI 类型、接口实例绑定、PIE、Windows；不要把空 ArrayFloat 结果推广到所有 DI。
 
 ## 故障定位
 
@@ -59,3 +59,11 @@
 - 写操作各为一个撤销步骤，之后保存资产；Actor 上组件级设置（碰撞配置、Simulate Physics）仍用 control_actor。Field（Anchor/Disable）相关命令尚未提供。
 
 MCP off：检查开关、重启及 UE 日志。401/403：检查工程身份、动态令牌和请求头。连接拒绝：确认端口和运行进程。工具不存在：重载 Agent 配置，确认使用匹配的 0.6 客户端/代理。不要输出令牌排错。
+
+## Niagara CPU 粒子快照（UE 5.8）
+
+`get_niagara_particle_data`：先 search「niagara particle data」并 describe。必填 `actorName`、`emitterName`、`attributes`（如 `["Position", "Velocity"]`）；`maxParticles` 默认 100，范围 1–2000。PIE 运行时只查 PIE 世界，否则查编辑器世界；Actor 必须精确且唯一，且只有一个 Niagara 组件，回复含实际世界和组件名。只支持已有有效实例的 stateful CPU 发射器；普通读取须已有当前缓冲，显式 `advanceTicks > 0` 可先推进 pending spawn 或尚无缓冲的实例，GPU/stateless 返回 NOT_SUPPORTED，不激活、不重置、不保存。错误会列出可用 Actor/组件/发射器/属性名；未被使用的属性可能被编译器删掉。
+
+回复 `particleCount` 为真实总数，`returnedCount` 为截断数，各属性为 `{name,type,values}`，支持 Float、Int、Bool、Vector2、Vector、Vector4、Color、Position、Quat。数组分量为 xy/xyz/xyzw、Color rgba；Position 用引擎 LWC 与局部发射器变换转到世界空间（UE 单位），其余向量保留模拟空间。同次各属性按粒子缓冲索引对应，跨调用不可当成稳定粒子 ID。
+
+普通读取只在游戏线程等待已有异步模拟完成，不推进或 finalize。只有显式 `advanceTicks > 0` 才先调用 AdvanceSimulation；`advanceTicks` 上限 10000，`tickDeltaSeconds` 默认 1/60、须大于 SMALL_NUMBER 且 <= 1，不能单独传。暂停系统拒绝推进；推进前只要求组件激活、controller 有效、实例未完成且未暂停，不因 pending spawn 或无缓冲提前退出。若已有缓冲，先验证发射器、CPU 类型和可读属性；没有缓冲则推进后再做完整验证。推进后重新核对实例和 age。推进可能触发完成/池化回调，失败不撤回已推进的状态，因此不能盲目重试。纯观察请省略两个推进参数。实例已完成返回 SYSTEM_COMPLETE；未推进且 pending spawn/无缓冲返回 NO_SIMULATION_DATA，提示传 advanceTicks 或在 PIE 中读取。两个推进参数的默认值由 C++ 提供，不在 schema 中注入，确保单传 tickDeltaSeconds 仍在任何模拟操作前返回 INVALID_ARGUMENT。已实测（BP_Test 5.8.4 Mac，scratch-7，编辑器世界）：新组件不推进返回带上述提示的 NO_SIMULATION_DATA；120 ticks × 0.0333 秒后 Position/Velocity 读取成功，31 个粒子、age 3.9959964752、localSpaceEmitter false。两次不推进读取的 age 和总数不变；maxParticles=5 返回 5、总数仍为 31；不存在发射器/属性的错误列出可用名字，单传 tickDeltaSeconds 被 INVALID_ARGUMENT 拒绝。HLSL 与 NS_ScratchFlow 各 31 个粒子，Y/Z 均为 0，X 范围约 -373..355 与 -376..378，未固定随机种子，仅为分布相近，未做逐粒子比对。临时 Actor 均已删除，未保存关卡；日志无新增 Ensure/Fatal/越界。未验证：PIE、局部空间发射器、远离原点 LWC、GPU/stateless 的 NOT_SUPPORTED 实测、其余类型的逐项读取、异步压力、完成/池化回调、暂停/完成状态错误及 Windows。

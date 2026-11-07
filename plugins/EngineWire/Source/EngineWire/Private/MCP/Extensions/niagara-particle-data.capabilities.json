@@ -1,0 +1,263 @@
+[
+ {
+  "id": "manage_effect.get_niagara_particle_data",
+  "aliases": [],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara runtime",
+   "topics": [
+    "niagara particles",
+    "particle positions",
+    "CPU particle data",
+    "particle attributes",
+    "Niagara 粒子位置",
+    "粒子数值读取"
+   ],
+   "summary": "Read the current particle buffer of a live stateful CPU Niagara emitter on an actor in PIE (preferred) or the editor world. Reports the real total and a bounded snapshot. Position is converted from Niagara LWC/local simulation coordinates to world space in Unreal units; all other vectors retain simulation space. No assets are saved. Only explicitly passing advanceTicks > 0 advances this component with AdvanceSimulation before the read; this can run completion callbacks. Missing attributes list available compiled attributes; GPU/stateless emitters return NOT_SUPPORTED. An explicit positive advance can initialize a pending first spawn before validating the new particle buffer; existing emitter/type/attribute data is validated first when available.",
+   "whenToUse": [
+    "Numerically inspect CPU particle Position, Velocity or other compiled attributes on a live Niagara component.",
+    "Compare a Scratch module result after explicitly advancing a running simulation."
+   ],
+   "whenNotToUse": [
+    "GPU or stateless emitters: no GPU readback is implemented.",
+    "Inactive or completed systems: this call does not activate or reset them. Without advanceTicks > 0, pending-first-tick/missing-buffer systems return NO_SIMULATION_DATA with guidance; completed instances return SYSTEM_COMPLETE.",
+    "Actors with multiple Niagara components: the target would be ambiguous.",
+    "A strictly observational request must omit advanceTicks and tickDeltaSeconds."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action on manage_effect."
+     },
+     "actorName": {
+      "type": "string",
+      "description": "Exact actor label, unique object name or full object path in PIE if running, otherwise editor world. Must identify one actor with exactly one Niagara component."
+     },
+     "emitterName": {
+      "type": "string",
+      "description": "Exact emitter handle display name (case-insensitive); errors list available instance names."
+     },
+     "attributes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+       "type": "string"
+      },
+      "description": "Compiled attribute names, e.g. Position, Velocity or Particles.Position. Duplicate requests are coalesced. Unused attributes may be optimized out."
+     },
+     "maxParticles": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2000,
+      "default": 100,
+      "description": "Maximum particles returned per attribute; particleCount is the uncapped current buffer count."
+     },
+     "advanceTicks": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "Explicit opt-in to advance this component synchronously before reading. Does not unpause, activate or reset. Can complete the system; failure after advancing does not undo simulation. Omitted or zero means no advance. A pending first spawn or missing current buffer does not block an explicit positive advance."
+     },
+     "tickDeltaSeconds": {
+      "type": "number",
+      "maximum": 1,
+      "description": "Simulation step, only with advanceTicks; must exceed engine SMALL_NUMBER. Omitted defaults to 1/60."
+     }
+    },
+    "required": [
+     "action",
+     "actorName",
+     "emitterName",
+     "attributes"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean"
+     },
+     "message": {
+      "type": "string"
+     },
+     "particleCount": {
+      "type": "integer",
+      "description": "Real total number in the current CPU buffer, before limiting."
+     },
+     "returnedCount": {
+      "type": "integer"
+     },
+     "simTarget": {
+      "type": "string",
+      "enum": [
+       "CPUSim"
+      ]
+     },
+     "world": {
+      "type": "string",
+      "description": "Selected world object path."
+     },
+     "worldType": {
+      "type": "string",
+      "enum": [
+       "Editor",
+       "PIE"
+      ]
+     },
+     "actorName": {
+      "type": "string"
+     },
+     "componentName": {
+      "type": "string"
+     },
+     "emitterName": {
+      "type": "string"
+     },
+     "localSpaceEmitter": {
+      "type": "boolean"
+     },
+     "advanceTicksRequested": {
+      "type": "integer"
+     },
+     "age": {
+      "type": "number",
+      "description": "System age after the snapshot wait/optional advance."
+     },
+     "attributes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "type": {
+         "type": "string",
+         "description": "Engine type display name. Float/Int are numbers, Bool is boolean; Vector2 is [x,y], Vector/Position [x,y,z], Vector4/Quat [x,y,z,w], Color [r,g,b,a]."
+        },
+        "coordinateSpace": {
+         "type": "string",
+         "enum": [
+          "world"
+         ],
+         "description": "Present for Position only; other vectors retain simulation space."
+        },
+        "values": {
+         "type": "array",
+         "items": {
+          "type": [
+           "number",
+           "boolean",
+           "array"
+          ],
+          "items": {
+           "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 4
+         }
+        }
+       },
+       "required": [
+        "name",
+        "type",
+        "values"
+       ],
+       "additionalProperties": false
+      },
+      "description": "Same buffer indices across attributes, not stable particle IDs across calls. Non-finite or invalid reader values fail the request; no zero-filled fallback."
+     }
+    },
+    "required": [
+     "success",
+     "particleCount",
+     "returnedCount",
+     "simTarget",
+     "attributes"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Read up to 100 CPU particle positions and velocities without advancing.",
+    "input": {
+     "action": "get_niagara_particle_data",
+     "actorName": "NiagaraActor_0",
+     "emitterName": "Fountain",
+     "attributes": [
+      "Position",
+      "Velocity"
+     ],
+     "maxParticles": 100
+    },
+    "output": {
+     "success": true,
+     "particleCount": 1,
+     "returnedCount": 1,
+     "simTarget": "CPUSim",
+     "attributes": [
+      {
+       "name": "Position",
+       "type": "Position",
+       "coordinateSpace": "world",
+       "values": [
+        [
+         100,
+         200,
+         300
+        ]
+       ]
+      },
+      {
+       "name": "Velocity",
+       "type": "Vector",
+       "values": [
+        [
+         0,
+         0,
+         10
+        ]
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit",
+    "play"
+   ]
+  },
+  "behavior": {
+   "effect": "read",
+   "idempotency": "non-idempotent",
+   "longRunning": false,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "read",
+   "consent": "none",
+   "dataAccess": "project-read"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "get_niagara_particle_data"
+  }
+ }
+]

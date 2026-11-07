@@ -22,6 +22,7 @@
 #include "NiagaraNodeOp.h"
 #include "NiagaraNodeWithDynamicPins.h"
 #include "NiagaraScratchPadContainer.h"
+#include "NiagaraTypeRegistry.h"
 #include "ScopedTransaction.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/UObjectIterator.h"
@@ -30,6 +31,36 @@ namespace McpNiagaraAuthoringHandlers
 {
 namespace
 {
+// Keep class types out of the shared user-parameter resolver. Creating the CDO lets each interface register its
+// own selection flags; registering with None only ensures a type handle exists and does not broaden those flags.
+FNiagaraTypeDefinition ResolveScratchType(const FString& Name)
+{
+    const FNiagaraTypeDefinition ValueType = ResolveNiagaraTypeByName(Name);
+    if (ValueType.IsValid()) return ValueType;
+    const FString ClassName = Name.StartsWith(TEXT("NiagaraDataInterface"), ESearchCase::IgnoreCase) ? Name : TEXT("NiagaraDataInterface") + Name;
+    UClass* Found = nullptr;
+    for (TObjectIterator<UClass> It; It; ++It)
+    {
+        if (It->GetName().Equals(ClassName, ESearchCase::IgnoreCase)
+            && It->IsChildOf(UNiagaraDataInterface::StaticClass())
+            && !It->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+        {
+            if (Found) return FNiagaraTypeDefinition();
+            Found = *It;
+        }
+    }
+    if (!Found) return FNiagaraTypeDefinition();
+    Found->GetDefaultObject();
+    const FNiagaraTypeDefinition Type(Found);
+    FNiagaraTypeRegistry::Register(Type, ENiagaraTypeRegistryFlags::None);
+    return Type;
+}
+
+const TCHAR* ScratchTypeHelp()
+{
+    return TEXT("Use Float, Int, Bool, Vector, Vector2, Vector4, Color, Position or Quat; Scratch inputs also accept a loaded concrete data-interface class, e.g. NiagaraDataInterfaceArrayFloat or ArrayFloat. Data interfaces cannot be outputs.");
+}
+
 // Reaches the protected virtual through a member pointer, which holds a vtable slot and so links without the engine
 // exporting anything. Never instantiated.
 struct FDynamicPinsAccess : UNiagaraNodeWithDynamicPins
@@ -583,10 +614,17 @@ private:
 
     UEdGraphPin* AddPinNamed(UEdGraphNode* Node, const FString& Name, const FString& TypeName, EEdGraphPinDirection Direction, FString& OutError)
     {
-        const FNiagaraTypeDefinition Type = ResolveNiagaraTypeByName(TypeName);
+        const FNiagaraTypeDefinition Type = ResolveScratchType(TypeName);
         if (!Type.IsValid())
         {
-            OutError = FString::Printf(TEXT("Unknown type '%s'. %s"), *TypeName, NiagaraTypeNamesHelp());
+            OutError = FString::Printf(TEXT("Unknown type '%s'. %s"), *TypeName, ScratchTypeHelp());
+            return nullptr;
+        }
+        if (Type.IsDataInterface()
+            && !(IsCustomHlslNode(Node) && Direction == EGPD_Input)
+            && !(Node->GetClass()->GetName() == TEXT("NiagaraNodeParameterMapGet") && Direction == EGPD_Output))
+        {
+            OutError = TEXT("Data interfaces are supported only as module inputs (Map Get) or Custom HLSL input pins, not as declared outputs, Custom HLSL outputs, or op/if/select pins.");
             return nullptr;
         }
         UNiagaraNodeWithDynamicPins* Dynamic = AsDynamicPinsNode(Node);
@@ -642,10 +680,48 @@ private:
         return true;
     }
 
+    bool ValidatePinTypes(const TSharedPtr<FJsonObject>& Op, const TCHAR* Field, bool bAllowDataInterface, FString& OutError)
+    {
+        const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+        if (!Op->TryGetArrayField(Field, List))
+        {
+            return true;
+        }
+        for (const TSharedPtr<FJsonValue>& Each : *List)
+        {
+            const TSharedPtr<FJsonObject>* PinObj = nullptr;
+            if (!Each.IsValid() || !Each->TryGetObject(PinObj))
+            {
+                OutError = FString::Printf(TEXT("'%s' holds {name, type} objects."), Field);
+                return false;
+            }
+            const FString TypeName = GetJsonStringField(*PinObj, TEXT("type"));
+            const FNiagaraTypeDefinition Type = ResolveScratchType(TypeName);
+            if (!Type.IsValid())
+            {
+                OutError = FString::Printf(TEXT("Unknown type '%s'. %s"), *TypeName, ScratchTypeHelp());
+                return false;
+            }
+            if (Type.IsDataInterface() && !bAllowDataInterface)
+            {
+                OutError = TEXT("Data interfaces are supported only as module inputs (Map Get) or Custom HLSL input pins, not as declared outputs, Custom HLSL outputs, or op/if/select pins.");
+                return false;
+            }
+        }
+        return true;
+    }
+
     UEdGraphNode* AddNode(const TSharedPtr<FJsonObject>& Op, FString& OutError)
     {
         const FString Kind = GetJsonStringField(Op, TEXT("kind"));
         const bool bCustomHlsl = Kind == TEXT("custom_hlsl");
+        // Map Set joins the map chain as it is created, so reject invalid pin types before creating any node.
+        if (!ValidatePinTypes(Op, TEXT("pins"), Kind == TEXT("map_get"), OutError)
+            || !ValidatePinTypes(Op, TEXT("inputs"), bCustomHlsl, OutError)
+            || !ValidatePinTypes(Op, TEXT("outputs"), false, OutError))
+        {
+            return nullptr;
+        }
         UEdGraphNode* Node = nullptr;
         EEdGraphPinDirection PinDirection = EGPD_Output;
         if (Kind == TEXT("map_get") || Kind == TEXT("map_set"))
@@ -811,6 +887,12 @@ private:
         if (!Name.Contains(TEXT(".")))
         {
             Name = (bInput ? TEXT("Module.") : TEXT("Output.Module.")) + Name;
+        }
+        const FNiagaraTypeDefinition Type = ResolveScratchType(GetJsonStringField(Op, TEXT("type")));
+        if (Type.IsDataInterface() && !bInput)
+        {
+            OutError = TEXT("declare_output does not support data interfaces; use declare_input and connect it to a Custom HLSL input.");
+            return false;
         }
         const FString NodeRef = GetJsonStringField(Op, TEXT("node"));
         UEdGraphNode* Node = NodeRef.IsEmpty() ? FindOrAddMapNode(bInput, OutError) : ResolveNode(NodeRef, OutError);

@@ -41,6 +41,7 @@ bool UEngineWireSubsystem::HandleManageNiagaraAuthoringAction(
     McpNiagaraAuthoringHandlers::FActionContext Context =
         McpNiagaraAuthoringHandlers::MakeActionContext(this, RequestId, Payload, RequestingSocket);
     Context.SubAction = SubAction;
+    if (McpNiagaraAuthoringHandlers::HandleParticleDataAction(Context, SubAction)) return true;
     if (!McpNiagaraAuthoringHandlers::ValidateCommonFields(Context))
     {
         return true;

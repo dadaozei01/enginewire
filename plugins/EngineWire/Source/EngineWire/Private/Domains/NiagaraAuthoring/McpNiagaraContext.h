@@ -271,4 +271,5 @@ bool HandleSimulationAction(FActionContext& Context, const FString& SubAction);
 bool HandleInfoValidationAction(FActionContext& Context, const FString& SubAction);
 // In McpNiagaraScratch.cpp: system-level scratch modules, the ones listed under Local Modules.
 bool HandleScratchAction(FActionContext& Context, const FString& SubAction);
+bool HandleParticleDataAction(FActionContext& Context, const FString& SubAction);
 }
