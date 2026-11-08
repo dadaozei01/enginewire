@@ -79,7 +79,7 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 已实测（scratch-8d，BP_Test 5.8.4 Mac，编辑器世界）：新建临时 NiagaraActor，推进 120×0.0333 秒，每次均 31 粒子。FloatData 三项 Length→Z=1003；不改图仅改五项→1005；[10,20,30] 的 Get(1)→1020，保存/用户重启后 get 和 Z=1020 均保持。新建用户 DiArr 四项、绑定 HlslDiTest.Arr→get 显示 linked/User.DiArr，Length→1004；ArrayFloat3 两个向量 Length→1002；临时线性样条长度300，SoftSourceActor 路径赋值后 GetSplineLength→1300。错误类、InternalFloatData、非 DI 输入、未知属性和错误值类型均拒绝，完整 get 读回不变。临时 Actor 全删，未保存关卡，日志增量无 Ensure/Fatal/越界。最终 HLSL 恢复为 User.DiArr 的 Length（Z=1004），样条软引用已清空。用户已确认系统编辑器与模块图表能打开，编辑器仍可响应；但打开后新增第20项相同的 Duplicate child Distance Distribution Mode ensure，随后 CrashReportClientEditor 在含 FScheduler::StopWorkers 的故障线程中崩溃。数值测试阶段无新增错误不能推广为 UI 打开无错误；本轮未修改引擎或报告隐私设置，详见第23项。
 写入失败会回滚并在回复中报告 rolledBack 与 residualChanges；已知限制：撤销后包为脏且有重做记录时再发生同步失败，编译 DI 条目数可能无法恢复（rolledBack=false），恢复办法未实测，先用 get 读回再决定。事务与回滚以 scratch-10 实测，详见 UPSTREAM.md 第 23 项。
 
-未验证：PIE/Windows/GPU、局部空间/远原点 LWC、超过256项的截断实测、其他 DI、ArrayFloat3 各分量调用、多发射器/多脚本内容同步压力、复杂绑定/共享动态输入清理、用户参数及 Spline/ArrayFloat3 的独立重启持久化、持久 Actor 软引用的重启解析。完整记录见 UPSTREAM 第23项。
+未验证：PIE/Windows/GPU、局部空间/远原点 LWC、超过256项的截断实测、其他 DI、ArrayFloat3 各分量调用、多发射器/多脚本内容同步压力、复杂绑定/共享动态输入清理、用户参数及 Spline/ArrayFloat3 的独立重启持久化、持久 Actor 软引用的重启解析。完整记录见 UPSTREAM 第23项。（Scratch 模块和粒子读取已在 Mac 上实测过 PIE、GPU Scratch、本地空间和远原点 LWC，见 UPSTREAM 第 25 项；上面列的是 DI 赋值本身在这些场景下尚未单独验证。）
 
 ## 删除未引用 Niagara 用户参数（UE 5.8）
 
