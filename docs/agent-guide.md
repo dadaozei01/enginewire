@@ -2,6 +2,8 @@
 
 统一规则：优先已验证的 EngineWire MCP；成熟批量任务可用编辑器内 UE Python；独立 Remote Execution 备用。MCP 提供 Python 执行能力时可沿现有连接执行，不必另开网络桥；不安装或依赖任务按钮。
 
+小任务快速通道：建文件夹、移动、改名、复制资产或文件夹、Actor 改名或归入大纲文件夹这类规则明确的机械操作，按[共享协议第 0 节](https://github.com/dadaozei01/ue-ai-bridge-protocol/blob/main/docs/agent-entry.md)处理：不再读本页其余章节，两项及以上用一段 `system_control.execute_python` 脚本一次做完，单项用最顺手的 MCP，不逐项 search/describe。
+
 跨 Agent 共享操作规范见 [ue-ai-bridge-protocol](https://github.com/dadaozei01/ue-ai-bridge-protocol/blob/main/docs/agent-entry.md)，本页负责 EngineWire 的具体调用方式。
 
 ## 连接
