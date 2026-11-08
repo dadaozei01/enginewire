@@ -54,6 +54,6 @@
 - cluster_geometry_collection：Auto Cluster，clusterSizeMethod by_number / by_fraction / by_size / by_grid，默认对根节点分组。
 - get_geometry_collection_info：只读，碎块数、簇数、层级与每层数量、包围盒、三角形数和物理设置。
 - configure_geometry_collection：已放进关卡的 Actor，其组件在放置时拷贝了一份资产的伤害阈值、伤害模型和物理材质，之后改资产不会影响它（引擎行为）。用 actorName 指定时会同步该 Actor，其他 Actor 用 applyToActors 点名，没点名的列在 placedActorsNotUpdated 并提示。可设置：伤害阈值（每层一个）、damageModel、enableClustering、第一个尺寸档的碰撞类型与形状、Convex Overlap Removal 与凸包参数、质量、物理材质、Nanite。走细节面板同一条重建路径，先校验全部参数再写入。
-- 写操作各为一个撤销步骤，之后保存资产；Actor 上组件级设置（碰撞配置、Simulate Physics）仍用 control_actor。Field（Anchor/Disable）相关命令尚未提供。
+- 写操作各为一个撤销步骤，之后保存资产；Actor 上组件级设置（碰撞配置、Simulate Physics）仍用 control_actor。Field 没有专门命令，用通用命令即可（Mac 已实测锚定生效）：control_actor spawn（spawnKind blueprint）放引擎自带的 /Engine/EditorResources/FieldNodes/ 下的场，如 FS_AnchorField_Generic（盒子缩放 1 时为 100 cm，用 Actor 缩放调大小）；control_actor edit_component 的 set_property 把 GC 组件的 InitializationFields 设为场 Actor 的对象路径数组；场的参数用 set_blueprint_variables。从上往下随时间释放需要运行时逻辑（蓝图 Timeline 或 Sequencer 移动场），尚未搭建。
 
 MCP off：检查开关、重启及 UE 日志。401/403：检查工程身份、动态令牌和请求头。连接拒绝：确认端口和运行进程。工具不存在：重载 Agent 配置，确认使用匹配的 0.6 客户端/代理。不要输出令牌排错。
