@@ -15,7 +15,7 @@ Claude Code（命令行与桌面版 Code 标签共用同一份配置）可直接
 Windows PowerShell：
 
 ```powershell
-$helper = 'D:/tools/enginewire-ue54/scripts/mcp-headers.cjs'
+$helper = 'D:/tools/enginewire/scripts/mcp-headers.cjs'
 $cfg = [ordered]@{ type = 'http'; url = 'http://127.0.0.1:3000/mcp'; headersHelper = "node `"$helper`"" } | ConvertTo-Json -Compress
 claude mcp add-json unreal $cfg --scope user
 ```
@@ -25,13 +25,13 @@ PowerShell 手写 JSON 引号容易出错，用 ConvertTo-Json 生成更稳妥�
 Mac 终端：
 
 ```sh
-claude mcp add-json unreal '{"type":"http","url":"http://127.0.0.1:3000/mcp","headersHelper":"node \"/Users/you/tools/enginewire-ue54/scripts/mcp-headers.cjs\""}' --scope user
+claude mcp add-json unreal '{"type":"http","url":"http://127.0.0.1:3000/mcp","headersHelper":"node \"/Users/you/tools/enginewire/scripts/mcp-headers.cjs\""}' --scope user
 ```
 
 若 Claude Code 找不到 node，把 node 换成 which node 输出的绝对路径。没有 Node 时用同目录的 scripts/mcp-headers.py，macOS 自带的 /usr/bin/python3 即可：
 
 ```sh
-claude mcp add-json unreal '{"type":"http","url":"http://127.0.0.1:3000/mcp","headersHelper":"/usr/bin/python3 \"/Users/you/tools/enginewire-ue54/scripts/mcp-headers.py\""}' --scope user
+claude mcp add-json unreal '{"type":"http","url":"http://127.0.0.1:3000/mcp","headersHelper":"/usr/bin/python3 \"/Users/you/tools/enginewire/scripts/mcp-headers.py\""}' --scope user
 ```
 
 ### 固定工程

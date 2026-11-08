@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build EngineWire for UE 5.8 on a Mac. Run from a build/ue58* checkout.
+# Build EngineWire for UE 5.8 on a Mac. Run from a main (UE 5.8) checkout.
 #
 #   scripts/build-ue58-mac.sh [--check-only] [--engine <UE_5.8 dir>] [--out <new output dir>]
 #

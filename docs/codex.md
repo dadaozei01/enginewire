@@ -5,7 +5,7 @@
 ```toml
 [mcp_servers.unreal_engine]
 url = "http://127.0.0.1:3000/mcp"
-http_headers_helper = '"C:/Program Files/nodejs/node.exe" "D:/tools/enginewire-ue54/scripts/mcp-headers.cjs"'
+http_headers_helper = '"C:/Program Files/nodejs/node.exe" "D:/tools/enginewire/scripts/mcp-headers.cjs"'
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 ```
