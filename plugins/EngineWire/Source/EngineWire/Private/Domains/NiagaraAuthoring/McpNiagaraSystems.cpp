@@ -1,5 +1,6 @@
 #include "Domains/NiagaraAuthoring/McpNiagaraContext.h"
 #include "Domains/NiagaraAuthoring/McpNiagaraCreatePackage.h"
+#include "NiagaraSpriteRendererProperties.h"
 
 namespace McpNiagaraAuthoringHandlers
 {
@@ -108,6 +109,23 @@ static bool CreateNiagaraEmitter(FActionContext& Context)
     UNiagaraEmitterFactoryNew::InitializeEmitter(NewEmitter, true);
     NewEmitter->SetUniqueEmitterName(Context.Name);
 #endif
+    // The default sprite renderer comes with an empty material slot, which draws the engine's checker fallback
+    // and hides particle colour. Fill only empty sprite slots with the engine's own default sprite material.
+    int32 DefaultMaterialsApplied = 0;
+    if (MCP_NIAGARA_EMITTER_DATA_TYPE* EmitterData = MCP_GET_LATEST_EMITTER_DATA(NewEmitter))
+    {
+        UMaterialInterface* DefaultSprite = LoadObject<UMaterialInterface>(nullptr, TEXT("/Niagara/DefaultAssets/DefaultSpriteMaterial.DefaultSpriteMaterial"));
+        for (UNiagaraRendererProperties* Renderer : EmitterData->GetRenderers())
+        {
+            UNiagaraSpriteRendererProperties* Sprite = Cast<UNiagaraSpriteRendererProperties>(Renderer);
+            if (Sprite && DefaultSprite && !Sprite->Material)
+            {
+                Sprite->Material = DefaultSprite;
+                ++DefaultMaterialsApplied;
+            }
+        }
+    }
+    Context.Result->SetNumberField(TEXT("defaultSpriteMaterialsApplied"), DefaultMaterialsApplied);
     FAssetRegistryModule::AssetCreated(NewEmitter);
     if (Context.bSave)
     {
@@ -213,13 +231,23 @@ static bool SetEmitterProperties(FActionContext& Context)
     // Any other key used to be ignored under an "updated" reply.
     const TSharedPtr<FJsonObject>* PropsObj = nullptr;
     const TSharedPtr<FJsonObject>* ModulesObj = nullptr;
-    bool bEnabled = false;
+    bool bEnabled = false, bLocalSpace = false, bDeterminism = false;
     const bool bHasProps = Context.Payload->TryGetObjectField(TEXT("emitterProperties"), PropsObj) && PropsObj->IsValid();
     const bool bHasEnabled = bHasProps && (*PropsObj)->TryGetBoolField(TEXT("enabled"), bEnabled);
     const bool bHasModules = bHasProps && (*PropsObj)->TryGetObjectField(TEXT("moduleEnabled"), ModulesObj) && ModulesObj->IsValid();
-    if ((!bHasEnabled && !bHasModules) || (*PropsObj)->Values.Num() != int32(bHasEnabled) + int32(bHasModules))
+    // localSpace and determinism change the compiled scripts, so they recompile like moduleEnabled.
+    const bool bHasLocalSpace = bHasProps && (*PropsObj)->TryGetBoolField(TEXT("localSpace"), bLocalSpace);
+    const bool bHasDeterminism = bHasProps && (*PropsObj)->TryGetBoolField(TEXT("determinism"), bDeterminism);
+    const int32 Recognized = int32(bHasEnabled) + int32(bHasModules) + int32(bHasLocalSpace) + int32(bHasDeterminism);
+    if (Recognized == 0 || (*PropsObj)->Values.Num() != Recognized)
     {
-        Context.SendError(TEXT("emitterProperties takes enabled (a boolean) and/or moduleEnabled ({ModuleName: boolean}, names as get_niagara_info lists them). Set module inputs with set_parameter_value."), TEXT("UNSUPPORTED_PROPERTY"));
+        Context.SendError(TEXT("emitterProperties takes enabled, localSpace and determinism (booleans) and/or moduleEnabled ({ModuleName: boolean}, names as get_niagara_info lists them). Set module inputs with set_parameter_value."), TEXT("UNSUPPORTED_PROPERTY"));
+        return true;
+    }
+    MCP_NIAGARA_EMITTER_DATA_TYPE* EmitterData = (bHasLocalSpace || bHasDeterminism) ? MCP_GET_EMITTER_DATA(*Handle) : nullptr;
+    if ((bHasLocalSpace || bHasDeterminism) && (!EmitterData || !Handle->GetInstance().Emitter))
+    {
+        Context.SendError(TEXT("This emitter has no editable emitter data (stateless emitter?). Nothing was changed."), TEXT("NOT_SUPPORTED"));
         return true;
     }
     UNiagaraScriptSource* Source = bHasModules ? GetEmitterScriptSource(Handle) : nullptr;
@@ -262,7 +290,17 @@ static bool SetEmitterProperties(FActionContext& Context)
     {
         Handle->SetIsEnabled(bEnabled, *System, false);
     }
-    if (bHasModules)
+    if (EmitterData)
+    {
+        System->Modify();
+        Handle->GetInstance().Emitter->Modify();
+        if (bHasLocalSpace) EmitterData->bLocalSpace = bLocalSpace;
+        if (bHasDeterminism) EmitterData->bDeterminism = bDeterminism;
+        Handle->GetInstance().Emitter->PostEditChange();
+        Context.Result->SetBoolField(TEXT("localSpace"), EmitterData->bLocalSpace);
+        Context.Result->SetBoolField(TEXT("determinism"), EmitterData->bDeterminism);
+    }
+    if (bHasModules || EmitterData)
     {
         System->RequestCompile(false);
     }

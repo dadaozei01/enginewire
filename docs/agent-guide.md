@@ -85,4 +85,6 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 
 先 search「remove niagara user parameter」并 describe，使用 `remove_niagara_user_parameter` 的 consentGrant 执行。只接收 `systemPath` 与 `name`（`X` 或 `User.X`），先关闭该系统的资产编辑器。预检返回 PARAMETER_IN_USE 时读 references[] 并在编辑器里手动处理；REFERENCE_SCAN_INCOMPLETE 表示源不可检查，禁止当成没有引用。没有 force 或改名能力：原生 ViewModel 引用同步接口未导出，不能靠直接改 store 安全替代。需要改名时先加新参数，手动迁移引用，再删旧参数。
 
+发射器开关：`edit_niagara_system edit=set_emitter_properties` 的 `emitterProperties` 接受 `enabled`、`localSpace`、`determinism`（布尔）和 `moduleEnabled`（{模块名: 布尔}），会重编译；其他属性用 set_parameter_value 或 inspect.set_property。`create_effect kind=niagara_emitter` 会给空的精灵材质槽填默认精灵材质。截图看不到粒子时，先用 control_editor configure_editor setting=window unthrottle 再开视口 realtime。GPU 发射器的粒子数据读不到（NOT_SUPPORTED），只能截图核对。
+
 成功删除为一个撤销步骤，请求编译并标脏，始终 saved=false。检查 compileOk、warnings、diEntriesBefore/After、diEntriesConsistent；原 DI 数据的撤销恢复和编译状态须读回验证。编译中的内联 DI 与用户 DI 是不同集合，不能用两个总数相等作为一致性判据。扫描为保守的本系统/递归脚本图与绑定检查，不是工程范围、外部 HLSL include 或宏的语义引用分析，详见 UPSTREAM 24。仅在用户授权时单独保存目标系统。

@@ -165,6 +165,14 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    scratch-11 重启后实测：TmpDelF 删除 → undo 恢复 → redo 删除通过；TmpRefF 绑定 SpawnRate.SpawnRate 后删除返回 PARAMETER_IN_USE，references 指到该输入，拒绝前后 Niagara info 相同；撤销独立临时绑定事务后 SpawnRate 恢复 8，再删除通过。TmpDi=[11,22,33] 未引用时删除，exposed DI 3→2，编译 runtime/cache 条目各为 10、被删参数残留 0；undo 后 get 完整恢复原数组，再删除通过。全部临时参数/链接清理。DiRollbackTest 预检 references=[]，删除并编译通过，exposed DI 2→1、残留 0；Arr 始终 linked User.DiArr，FloatData=[1,2,3,4]，列表仅剩 User.DiArr。单独保存 NS_DiTest 后 dirtyContent=[]。runtime/cache 总数包含内联 DI，不与 exposed 总数直接比较。
 
-   错误路径：缺 consent 正确返回 CONSENT_REQUIRED 和 describe nextCall；不存在参数返回 PARAM_NOT_FOUND，但最初 scratch-11 缺少 nextCall，引用拒绝同样缺少。已定位网关原有 handler-error 分支不附指导，仅对新增 remove 动作复用 DescribeGuidance，保留其他动作行为；补丁构建与重启后的回执验收以任务报告为准，尚未运行前不记为通过。撤销时观察到 cached DI 数可变为 0，下一次删除重编译后恢复 10；没有把 undo 的参数/内容恢复等同于编译缓存完全恢复。
+   错误路径：缺 consent 正确返回 CONSENT_REQUIRED 和 describe nextCall；不存在参数返回 PARAM_NOT_FOUND，但最初 scratch-11 缺少 nextCall，引用拒绝同样缺少。已定位网关原有 handler-error 分支不附指导，仅对新增 remove 动作复用 DescribeGuidance，保留其他动作行为；scratch-11 重启后复测（Claude 经 MCP）：不存在参数与 PARAMETER_IN_USE 均带 describe nextCall，引用指到 Map Get 引脚和 HlslDiTest.Arr 模块输入；冷加载读回 DiRollbackTest 已删、Arr 仍链接 User.DiArr=[1,2,3,4]。已提交 d4104da。撤销时观察到 cached DI 数可变为 0，下一次删除重编译后恢复 10；没有把 undo 的参数/内容恢复等同于编译缓存完全恢复。
+
+25. 发射器 LocalSpace / Determinism 开关与新建发射器默认精灵材质（2026-11-08，UE 5.8.4 Mac）：`edit_niagara_system edit=set_emitter_properties` 的 `emitterProperties` 新增 `localSpace`、`determinism`（布尔），可与 `enabled`、`moduleEnabled` 同时传；其他键仍以 UNSUPPORTED_PROPERTY 拒绝，错误信息列出全部可用键。写入 FVersionedNiagaraEmitterData 的 bLocalSpace / bDeterminism，前后 Modify 系统与发射器、PostEditChange 并请求重编译，回执返回实际值。无可编辑发射器数据（如 stateless）返回 NOT_SUPPORTED，不改动。生成的目录分片带 sha256，未改其描述文字，新键以本条和 agent-guide 为准。
+
+   `create_effect kind=niagara_emitter`：InitializeEmitter 给出的默认精灵渲染器材质槽为空，视口显示棋盘回退材质、看不出粒子颜色。现只对空的精灵材质槽填入引擎 `/Niagara/DefaultAssets/DefaultSpriteMaterial`，回执 `defaultSpriteMaterialsApplied` 给出数量；已有材质不覆盖。
+
+   scratch-12 实测（Claude 经 MCP）：新建发射器回执 defaultSpriteMaterialsApplied=1，视口显示白色软边精灵；localSpace+determinism 写入后回执为 true，放在 (500,0,100) 的实例经 get_niagara_particle_data 报 localSpaceEmitter=true、世界位置随 actor；多余键 bogus 返回 UNSUPPORTED_PROPERTY 且不改动。测试资产已删除。
+
+   C 轮实测（scratch-11，Claude 经 MCP，测试资产已删除）：最小 GPU 系统中 ParticleUpdate 阶段 Custom HLSL Scratch 写 Particles.Color / SpriteSize 生效（填默认精灵材质后可见红色）；PIE 中 get_niagara_particle_data 读到 Scratch 计算的位置、日志无 Niagara 错误；位于 (1e6,1e6,100) 的 CPU 系统用 HLSL 读写 Position，x/y 精确保持 1e6、z 均匀上升。GPU 的 particle reader 返回 NOT_SUPPORTED。依赖无源 SampleSpline 的 NS_ScratchHlsl 改 GPU 后不出粒子，未确认原因。validate 在该 GPU 拷贝上触发一次引擎 ensure（NiagaraStackEntry.cpp:832 Duplicate child Distance Distribution Mode，经 CollectNiagaraSystemStackIssues），未修。
 
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。
