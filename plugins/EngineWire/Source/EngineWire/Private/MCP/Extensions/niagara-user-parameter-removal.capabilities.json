@@ -1,0 +1,165 @@
+[
+  {
+    "id": "manage_effect.remove_niagara_user_parameter",
+    "aliases": [],
+    "discovery": {
+      "domain": "effect",
+      "family": "niagara user parameters",
+      "topics": [
+        "remove Niagara user parameter",
+        "delete unused parameter",
+        "删除用户参数"
+      ],
+      "summary": "Remove an unreferenced Niagara system user parameter in one undo step. Read-only graph, HLSL-pin and binding preflight refuses references or unavailable script sources. Recompiles and marks dirty; never saves. UE 5.8 stateful CPU systems only.",
+      "whenToUse": [
+        "Delete an unused system user parameter, including a DI parameter."
+      ],
+      "whenNotToUse": [
+        "Referenced parameters: delete or rename them manually in the editor.",
+        "Renaming is not supported: add a new parameter then remove the old one after manually updating references. No force option.",
+        "An open system asset editor, PIE, GPU or stateless emitters."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "systemPath": {
+            "type": "string",
+            "description": "Niagara system asset path. Close its asset editor first."
+          },
+          "name": {
+            "type": "string",
+            "description": "Existing user parameter, X or User.X. References cause PARAMETER_IN_USE with references[]. No force, rename or save option."
+          }
+        },
+        "required": [
+          "action",
+          "systemPath",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "parameterName": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-unreal-reflection-boundary": true
+            }
+          },
+          "unavailableSources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "compileOk": {
+            "type": "boolean"
+          },
+          "compiledScripts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "diEntriesBefore": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "diEntriesAfter": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "diEntriesConsistent": {
+            "type": "boolean"
+          },
+          "undo": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true,
+            "description": "One transaction restores the parameter and its original DI instance; compilation state must be read back after undo/redo."
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "title": "Remove an unused parameter without saving.",
+        "input": {
+          "action": "remove_niagara_user_parameter",
+          "systemPath": "/Game/FX/NS_Test",
+          "name": "TmpDelF"
+        },
+        "output": {
+          "success": true,
+          "removed": true,
+          "saved": false,
+          "references": []
+        }
+      }
+    ],
+    "availability": {
+      "requiredPlugins": [
+        "Niagara"
+      ],
+      "editorStates": [
+        "edit"
+      ]
+    },
+    "behavior": {
+      "effect": "destructive",
+      "idempotency": "non-idempotent",
+      "longRunning": true,
+      "safeToRetry": false
+    },
+    "policy": {
+      "requiredScope": "destructive",
+      "consent": "explicit",
+      "dataAccess": "project-write"
+    },
+    "cost": {
+      "latency": "interactive",
+      "resources": "medium"
+    },
+    "routing": {
+      "parentTool": "manage_effect",
+      "dispatchAction": "remove_niagara_user_parameter"
+    }
+  }
+]

@@ -149,4 +149,22 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    已知限制：刚撤销、包已脏且存在重做记录时如再发生同步失败，重新编译后的 DI 条目数可能与调用前不同，此时如实返回 rolledBack=false、runtimeAndCacheRestored=false，residualChanges 写明 “Compiled DI entry count differs from the original.”；图和撤销历史已恢复，包保持脏，重做可用。恢复办法（重新 set 或撤销/重做）未实测。未实测：DI_OVERRIDE_LINKS_REMAIN、CopyTo 中途失败、实例创建失败、单独编译失败路径（未做故障注入）。
 
+24. 仅删除未引用的 Niagara 用户参数（2026-11-08，UE 5.8 Mac）：新增 `remove_niagara_user_parameter`，独立 Extensions 注册，实现在 `McpNiagaraUserParameterRemoval.cpp`。参数仅 `systemPath`、`name`（接受 `X` / `User.X`）；effect=destructive，网关要求 describe 返回的一次性 explicit consentGrant。不提供 force、rename 或 save。被引用的参数请在编辑器里手动删除或改名；需要迁移时先添加新参数，手动更新引用，再删旧参数。
+
+   接口边界：核对本机 UE 5.8.4 头文件与 dylib 导出后，经 `FNiagaraParameterStore&` 的 `RemoveParameter(const FNiagaraVariableBase&)` 正常虚调用，保留引擎 UserRedirection store 的重定向处理；没有限定调用基类来绕过 override。没有复制/抽取未导出的 ViewModel 代码，也没有新模块/Target。原生面板的 `FNiagaraSystemViewModel::DeleteParameter` / `RenameParameter` 及 `DeleteUserParameterReferences` / `ReplaceUserParameterReferences` 未导出，故本能力不支持引用同步、改名或强制删除。
+
+   预检只读：系统 spawn/update、全部 stateful CPU 发射器脚本（含 event/stage）、系统内局部 Scratch 图表，以及递归调用的模块/动态输入脚本（通过已导出的 GetFunctionScriptSource 跟随 SelectedScriptVersion）；检查所有节点引脚名字和默认值、相邻链接引脚（返回模块输入路径）、节点的反射 binding/name/string/struct/array 属性（包含 Custom HLSL 源文本），以及系统内 renderer/DI 的对应绑定属性。命中返回 PARAMETER_IN_USE 和 references[]，不调用 Modify、重编译或标脏。缺失脚本源或无法检查的发射器返回 REFERENCE_SCAN_INCOMPLETE；当前系统编辑器打开或 PIE 时拒绝；GPU 发射器在写入前返回 NOT_SUPPORTED，本版不声称验收 GPU shader 编译。
+
+   名字按命名空间 token 匹配，不把 User.X2 当成 User.X；同时匹配 User.X.Member。扫描是保守检查：注释、默认值或非活动脚本中的同名引用也可能阻止删除；不是 HLSL 编译器或跨资产引用索引，动态拼接/宏/外部 include 的语义引用不能保证识别，且不检查其他资产或关卡组件的覆盖参数。不可把 references=[] 推广为工程范围没有引用。
+
+   写入：一个 FScopedTransaction，Modify 系统、原 DI 和系统/发射器脚本后删除；强制请求编译并等待，标脏但绝不自动保存。返回 undo（一个步骤）、compileOk、compiledScripts 和 warnings。撤销应恢复参数及原 DI 实例，重做再次删除；运行时/缓存编译状态必须在撤销/重做后另行读回核对。失败或编译异常不自动重发，不声称恢复原状态。
+
+   DI 核对：返回删除前后 exposed DI 数、runtime resolved DI 数、cached default DI 数和仍指向被删参数的条目数；检查 Name/CompileName 及 runtime 的 ResolvedVariable/ParameterStoreVariable、cached 的 RegisteredParameterMapRead/Write。确认 exposed 数减少正确且被删参数无残留，否则给出 warnings。模块内联 DI 也进入编译条目，总编译条目数不应直接等于 exposed DI 数；此检查不证明其他 DI 的绑定/内容都正确。
+
+   验证状态：已加入契约检查和引用 token/链接路径、错误恢复指引的引擎 Automation 测试。scratch-11 构建、安装、临时 Float/DI 的删除与撤销/重做、引用拒绝、缺 consent 和不存在参数、A-2 清理的实际结果以任务报告为准；未实测前不标记通过。Windows 未编译。
+
+   scratch-11 重启后实测：TmpDelF 删除 → undo 恢复 → redo 删除通过；TmpRefF 绑定 SpawnRate.SpawnRate 后删除返回 PARAMETER_IN_USE，references 指到该输入，拒绝前后 Niagara info 相同；撤销独立临时绑定事务后 SpawnRate 恢复 8，再删除通过。TmpDi=[11,22,33] 未引用时删除，exposed DI 3→2，编译 runtime/cache 条目各为 10、被删参数残留 0；undo 后 get 完整恢复原数组，再删除通过。全部临时参数/链接清理。DiRollbackTest 预检 references=[]，删除并编译通过，exposed DI 2→1、残留 0；Arr 始终 linked User.DiArr，FloatData=[1,2,3,4]，列表仅剩 User.DiArr。单独保存 NS_DiTest 后 dirtyContent=[]。runtime/cache 总数包含内联 DI，不与 exposed 总数直接比较。
+
+   错误路径：缺 consent 正确返回 CONSENT_REQUIRED 和 describe nextCall；不存在参数返回 PARAM_NOT_FOUND，但最初 scratch-11 缺少 nextCall，引用拒绝同样缺少。已定位网关原有 handler-error 分支不附指导，仅对新增 remove 动作复用 DescribeGuidance，保留其他动作行为；补丁构建与重启后的回执验收以任务报告为准，尚未运行前不记为通过。撤销时观察到 cached DI 数可变为 0，下一次删除重编译后恢复 10；没有把 undo 的参数/内容恢复等同于编译缓存完全恢复。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

@@ -170,7 +170,7 @@ bool ValidateCommonFields(FActionContext& Context)
         && ValidateAndSanitizePath(Context, Context.AssetPath, TEXT("assetPath"))
         && ValidateAndSanitizePath(Context, Context.SystemPath, TEXT("systemPath"))
         && ValidateAndSanitizePath(Context, Context.EmitterPath, TEXT("emitterPath"))
-        && ValidateNiagaraIdentifier(Context, Context.Name, TEXT("name"), false)
+        && ValidateNiagaraIdentifier(Context, Context.Name, TEXT("name"), Context.SubAction == TEXT("remove_niagara_user_parameter"))
         && ValidateNiagaraIdentifier(Context, Context.EmitterName, TEXT("emitterName"), true)
         && ValidateOneSystem(Context);
 }

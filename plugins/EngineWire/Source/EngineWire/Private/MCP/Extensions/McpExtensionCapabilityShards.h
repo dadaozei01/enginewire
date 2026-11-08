@@ -17,15 +17,15 @@ inline int32 Num() { return 1; }
 inline const McpGeneratedCapabilityShards::FMcpCapabilityShard& At(int32 Index)
 {
 	static const McpGeneratedCapabilityShards::FMcpCapabilityShard Table[] = {
-		{ TEXT("extensions"), Detail::MCP_CAP_EXTENSION_CHUNKS, 19, 12 },
+		{ TEXT("extensions"), Detail::MCP_CAP_EXTENSION_CHUNKS, 20, 13 },
 	};
 	check(Index >= 0 && Index < Num());
 	return Table[Index];
 }
 
-inline int32 TotalRecordCount() { return 12; }
+inline int32 TotalRecordCount() { return 13; }
 
 // The catalog revision of the generated catalog (8baedf318cc69404) and these records together. Rerun the script when the
 // generated shards change, so this follows them.
-inline const TCHAR* CatalogRevision() { return TEXT("12a59315ad48678d"); }
+inline const TCHAR* CatalogRevision() { return TEXT("a07436f5751cf3f0"); }
 }

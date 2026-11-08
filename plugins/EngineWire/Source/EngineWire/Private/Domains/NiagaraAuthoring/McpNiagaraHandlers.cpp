@@ -50,6 +50,7 @@ bool UEngineWireSubsystem::HandleManageNiagaraAuthoringAction(
     if (McpNiagaraAuthoringHandlers::HandleSystemEmitterAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleFixedModuleAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleRendererAction(Context, SubAction)) return true;
+    if (McpNiagaraAuthoringHandlers::HandleUserParameterRemovalAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleParameterAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleDynamicInputAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleDataInterfaceAction(Context, SubAction)) return true;

@@ -55,6 +55,7 @@ bool IsNiagaraAuthoringSubAction(const FString& SubAction)
         TEXT("add_kill_particles_module"),
         TEXT("add_camera_offset_module"),
         TEXT("add_user_parameter"),
+        TEXT("remove_niagara_user_parameter"),
         TEXT("set_parameter_value"),
         TEXT("bind_parameter_to_source"),
         TEXT("set_niagara_dynamic_input"),

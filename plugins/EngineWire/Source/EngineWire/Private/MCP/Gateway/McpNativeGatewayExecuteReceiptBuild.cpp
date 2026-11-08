@@ -92,7 +92,11 @@ TSharedPtr<FJsonObject> McpBuildGatewayExecuteReceipt(
 					Error.HandlerCode = ErrorCode;
 				}
 			}
-		return McpBuildErrorReceipt(CapabilityId, Error, Context);
+		// This extension promises a guided recovery for every refusal. Reuse the gateway's
+		// describe guidance (fresh consent is required), without changing other actions.
+		return McpBuildErrorReceipt(CapabilityId, Error, Context,
+			CapabilityId == TEXT("manage_effect.remove_niagara_user_parameter")
+				? DescribeGuidance(CapabilityId) : nullptr);
 	}
 
 	// Project the handler result to the capability's declared output fields

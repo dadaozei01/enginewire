@@ -80,3 +80,9 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 写入失败会回滚并在回复中报告 rolledBack 与 residualChanges；已知限制：撤销后包为脏且有重做记录时再发生同步失败，编译 DI 条目数可能无法恢复（rolledBack=false），恢复办法未实测，先用 get 读回再决定。事务与回滚以 scratch-10 实测，详见 UPSTREAM.md 第 23 项。
 
 未验证：PIE/Windows/GPU、局部空间/远原点 LWC、超过256项的截断实测、其他 DI、ArrayFloat3 各分量调用、多发射器/多脚本内容同步压力、复杂绑定/共享动态输入清理、用户参数及 Spline/ArrayFloat3 的独立重启持久化、持久 Actor 软引用的重启解析。完整记录见 UPSTREAM 第23项。
+
+## 删除未引用 Niagara 用户参数（UE 5.8）
+
+先 search「remove niagara user parameter」并 describe，使用 `remove_niagara_user_parameter` 的 consentGrant 执行。只接收 `systemPath` 与 `name`（`X` 或 `User.X`），先关闭该系统的资产编辑器。预检返回 PARAMETER_IN_USE 时读 references[] 并在编辑器里手动处理；REFERENCE_SCAN_INCOMPLETE 表示源不可检查，禁止当成没有引用。没有 force 或改名能力：原生 ViewModel 引用同步接口未导出，不能靠直接改 store 安全替代。需要改名时先加新参数，手动迁移引用，再删旧参数。
+
+成功删除为一个撤销步骤，请求编译并标脏，始终 saved=false。检查 compileOk、warnings、diEntriesBefore/After、diEntriesConsistent；原 DI 数据的撤销恢复和编译状态须读回验证。编译中的内联 DI 与用户 DI 是不同集合，不能用两个总数相等作为一致性判据。扫描为保守的本系统/递归脚本图与绑定检查，不是工程范围、外部 HLSL include 或宏的语义引用分析，详见 UPSTREAM 24。仅在用户授权时单独保存目标系统。
