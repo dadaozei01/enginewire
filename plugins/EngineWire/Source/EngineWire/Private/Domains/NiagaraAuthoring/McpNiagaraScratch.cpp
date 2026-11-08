@@ -29,8 +29,6 @@
 
 namespace McpNiagaraAuthoringHandlers
 {
-namespace
-{
 // Keep class types out of the shared user-parameter resolver. Creating the CDO lets each interface register its
 // own selection flags; registering with None only ensures a type handle exists and does not broaden those flags.
 FNiagaraTypeDefinition ResolveScratchType(const FString& Name)
@@ -55,6 +53,22 @@ FNiagaraTypeDefinition ResolveScratchType(const FString& Name)
     FNiagaraTypeRegistry::Register(Type, ENiagaraTypeRegistryFlags::None);
     return Type;
 }
+
+// The graphs the view model duplicates when the system editor opens are the ones edited here, so an open editor would
+// keep editing its stale copy and overwrite these edits on its next Apply.
+bool RefuseWhileEditorOpen(FActionContext& Context, UNiagaraSystem* System)
+{
+    UAssetEditorSubsystem* Editors = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+    if (Editors && Editors->FindEditorForAsset(System, false))
+    {
+        Context.SendError(FString::Printf(TEXT("%s is open in the Niagara editor, whose copy of the script would overwrite this edit. Close that editor and call again. Nothing was changed."), *System->GetName()), TEXT("SYSTEM_EDITOR_OPEN"));
+        return true;
+    }
+    return false;
+}
+
+namespace
+{
 
 const TCHAR* ScratchTypeHelp()
 {
@@ -352,18 +366,6 @@ bool ParseStage(const FString& Stage, ENiagaraScriptUsage& OutUsage)
     return false;
 }
 
-// The graphs the view model duplicates when the system editor opens are the ones edited here, so an open editor would
-// keep editing its stale copy and overwrite these edits on its next Apply.
-bool RefuseWhileEditorOpen(FActionContext& Context, UNiagaraSystem* System)
-{
-    UAssetEditorSubsystem* Editors = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
-    if (Editors && Editors->FindEditorForAsset(System, false))
-    {
-        Context.SendError(FString::Printf(TEXT("%s is open in the Niagara editor, whose copy of the script would overwrite this edit. Close that editor and call again. Nothing was changed."), *System->GetName()), TEXT("SYSTEM_EDITOR_OPEN"));
-        return true;
-    }
-    return false;
-}
 
 UNiagaraScript* FindScratchScript(UNiagaraSystem* System, const FString& ScriptName)
 {

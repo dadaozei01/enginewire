@@ -179,6 +179,13 @@ TSharedPtr<FJsonValue> ReadNiagaraValue(const FNiagaraParameterStore& Store, con
 bool AddPlacedUserParameters(FActionContext& Context, UNiagaraSystem* System);
 // An invalid definition (IsValid() false) for a name it does not know: a misspelt type must not become a Float.
 FNiagaraTypeDefinition ResolveNiagaraTypeByName(const FString& ParamType);
+#if MCP_HAS_NIAGARA_INPUT_OVERRIDES
+void ClearNiagaraInputOverrideLinks(UEdGraphPin& OverridePin);
+#if ENGINE_MINOR_VERSION >= 8
+FNiagaraTypeDefinition ResolveScratchType(const FString& Name);
+bool RefuseWhileEditorOpen(FActionContext& Context, UNiagaraSystem* System);
+#endif
+#endif
 // The names ResolveNiagaraTypeByName takes, for an error message.
 const TCHAR* NiagaraTypeNamesHelp();
 // Every script whose rapid-iteration store holds module inputs: the system spawn/update scripts
@@ -271,5 +278,6 @@ bool HandleSimulationAction(FActionContext& Context, const FString& SubAction);
 bool HandleInfoValidationAction(FActionContext& Context, const FString& SubAction);
 // In McpNiagaraScratch.cpp: system-level scratch modules, the ones listed under Local Modules.
 bool HandleScratchAction(FActionContext& Context, const FString& SubAction);
+bool HandleDataInterfaceConfigAction(FActionContext& Context, const FString& SubAction);
 bool HandleParticleDataAction(FActionContext& Context, const FString& SubAction);
 }

@@ -122,4 +122,31 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    已实测（scratch-7，BP_Test 5.8.4 Mac，非 PIE 编辑器世界）：新激活的 NS_ScratchHlsl 临时组件不传 advanceTicks 时返回 NO_SIMULATION_DATA，并提示传 advanceTicks > 0 或在 PIE 中读取；同一组件传 120 ticks、0.0333 秒后成功返回 Position/Velocity，总数和返回数均 31、age 3.9959964752、localSpaceEmitter false。随后两次不推进读取的 age、particleCount 均相同；maxParticles=5 返回 5 个，总数仍为 31。NS_ScratchFlow 同样推进成功且 age/数量一致，位置分布对照见第 20 项。不存在发射器返回 EMITTER_NOT_FOUND 并列 Crowd，不存在属性返回 ATTRIBUTE_NOT_FOUND 并列可用属性，单传 tickDeltaSeconds 返回 INVALID_ARGUMENT。三个临时 Actor 全部删除并列表确认 0，未保存关卡，未写入四个受保护原系统；日志增量无 Ensure、Fatal、Array index out of bounds 或 Duplicate child。NS_DiTest 的空 ArrayFloat 运行验证见第 21 项。
 
+23. Niagara 数据接口实例赋值与配置（2026-11-08，UE 5.8.4 Mac）：新增 `set_niagara_data_interface`（write）和 `get_niagara_data_interface`（read），位于 `McpNiagaraDataInterfaceConfig.cpp` 和独立 Extensions 记录。通过 `systemPath` 加 `moduleInput` / `userParameter` 二选一定位；模块路径第一版只支持发射器栈，要求 `emitterName`，用户参数路径不要求 emitter。类名复用第 21 项解析器；新建用户参数须给具体 DI 类，接受有/无 `User.` 前缀；已有非 DI 或不同类参数返回 PARAM_TYPE_MISMATCH，不替换。模块类须为输入声明类的子类。
+
+   预校验：系统资产编辑器打开时返回 SYSTEM_EDITOR_OPEN。仅开放 CPF_Edit，排除 EditConst、Deprecated、Transient；先把所有 properties 写到 transient 临时实例，失败不改资产。真实对象 Modify 后复制已经校验成功的属性，逐属性 PostEditChangeProperty，最后广播 OnChanged。ArrayFloat3 等 LWC 数组在 WITH_EDITORONLY_DATA 下靠该事件同步内部数据。现有属性写入器的 FSoftObjectProperty 分支已支持 SoftSourceActor 的 Actor 路径字符串，无需修改共用导入器；路径赋值本身不验证 Actor 是否存在。
+
+   模块 override 通过已有模块/input 定位与已导出的 GetOrCreateStackFunctionInputOverridePin、SetDataInterfaceValueForFunctionInput 创建。同类 NiagaraNodeInput 原地更新 DI，不改图；不同输入先清理旧连接。GetDataInterface、GetStackFunctionInputOverridePin、RemoveNodesForStackFunctionInputOverridePin 和默认 pin 查询未导出，分别使用反射、只读图遍历、抽取现有 LinkInputToParameter 清理逻辑；不调用 placeholder manager。清理保留仍被其他输出连接使用的节点。OnChanged 来自 NiagaraCore 的已导出函数，因此仅 UE 5.8 增加该现有模块的链接依赖，没有新建模块或 Target；其他版本的新能力返回 NOT_SUPPORTED。
+
+   编译与同步：模块路径 RequestCompile(false) 并等待完成，compileOk 判据与 Scratch apply 相同。数组内容不进入编译哈希，因此再经已导出的 GetResolvedRuntimeInstanceForEditorDataInterfaceInstance 定位运行时实例，Modify(false) 后 CopyTo，并按解析名称同步相应脚本 CachedDefaultDataInterfaces。两份数据均可序列化；本次 ArrayFloat 的保存/重启实测通过。仅编译及同步成功时按 save（省略为 true）保存；失败保留内存修改、不保存。用户参数直接更新 exposed store，不主动编译。get 不创建 override、不编译、不保存，返回 inline/linked/default、连接参数、类和可编辑属性；数组最多返回 256 项并带真实长度。无法解析为具体编辑器实例的复杂连接/默认值返回 valuesAvailable=false 和 null，不伪造运行时值。
+
+   已实测（安装 scratch-8d，BuildId 55116800，编辑器世界，非 PIE）：只写 NS_DiTest，Crowd 的 HlslDiTest。每次数值测试新建临时 NiagaraActor，激活后以 advanceTicks=120、tickDeltaSeconds=0.0333 读取 Position，均为 31/31 个粒子，Z 的最小/最大值相同。结果：
+   - ArrayFloat FloatData=[1,2,3]，Length 写入 1000+Count：Z 全部 1003，compileOk=true、compiledScripts=[]、runtimeSynced=true。
+   - 不改图（完整 Scratch 图读回一致），仅 FloatData 改为 5 项：Z 全部 1005；仍使用 RequestCompile(false)，运行时实例更新数 1、缓存条目更新数 2，无需 RequestCompile(true)。本项只证明本次路径有效，不声称所有 DI 均无需强制编译。
+   - FloatData=[10,20,30]，`float V; Arr.Get(1,V);` 写入 1000+V：Z 全部 1020。保存后 get 为 inline 且数组正确；用户重启后再次 get 仍为 [10,20,30]，不再赋值直接运行仍为 Z=1020。
+   - 新用户参数 DiArr（ArrayFloat，[1,2,3,4]）在不传 emitterName 时创建成功、compileRequired=false；经现有 bind_parameter_to_source（网关 edit_niagara_system/edit=bind_parameter）绑定 HlslDiTest.Arr，get 返回 linked、User.DiArr 和四项数据，Length 得 Z 全部 1004。
+   - 新输入 Arr3（ArrayFloat3），FloatData=[[1,2,3],[4,5,6]] 读回一致，Length 得 Z 全部 1002。没有以 Get 单独核对向量各分量。
+   - 新 Spline 输入：临时 Actor 上两个线性点间距 300，create_spline 读回长度 300；SoftSourceActor 设为其对象路径，`Spline.GetSplineLength(L)` 写入 1000+L，Z 全部 1300。临时 Actor 引用使用 save=false；测后清空引用、删除样条并保存系统，未将临时引用留在磁盘。
+   - 拒绝测试：Arr3 指定 ArrayFloat → PARAM_TYPE_MISMATCH（必须是输入类的子类）；InternalFloatData → INVALID_PROPERTY（列出 FloatData、GpuSyncMode、MaxElements）；非 DI ScalarCheck → PARAM_TYPE_MISMATCH；先给合法 FloatData 再给 NoSuchProperty → INVALID_PROPERTY；FloatData 给非数组字符串 → INVALID_PROPERTY_VALUE。全部拒绝，之后 get 的完整数据与之前相同，FloatData 仍为两个原向量。
+
+   测后 HLSL 恢复为 Arr.Length，Arr 仍 linked 到 User.DiArr，最后另建临时 Actor 验证 Z 全部 1004；Arr3 保留两个向量，Spline.SoftSourceActor=null，ScalarCheck 为负面测试新增 Float 输入。每个临时 Actor 均删除回执 existsAfter=false，最终按 EW_DI_ 查得 0；未保存关卡，未写 NS_CrowdFlow、NS_CrowdRanks、NS_ScratchFlow、NS_ScratchHlsl。两段测试日志增量均无 Ensure、Fatal、Array index out of bounds 或 Sample Spline Duplicate child；创建样条的首次请求因 points JSON 层级错误在 schema 校验阶段被拒绝，修正为 position 后成功，没有对应资产/Actor 副作用。本次不需要代码修复或 scratch-9/10 构建。
+
+   用户最终确认：NS_DiTest 系统编辑器和 HlslDiTest 模块图表均能打开，Unreal Editor 未退出。但打开后在本地 2026-11-08 00:10:57 的日志中新增 NiagaraStackEntry.cpp:832 的 Duplicate child Distance Distribution Mode ensure，与第 20 项已记录的签名一致；00:11:12 的 CrashReportClientEditor 诊断报告显示 EXC_BAD_ACCESS，故障线程包含 FScheduler::StopWorkers。MCP 此后仍可响应。该 ensure 的可见堆栈在 Niagara/引擎内部，没有 EngineWire 帧，但没有单独对未修改系统做本轮对照，不能凭此证明触发与插件或测试改动完全无关。用户看到白色报错窗口，其外观未直接检查，可能对应上述报告程序；未修改隐私设置或引擎。此前“日志无新增”的结论仅限数值测试阶段，不能延伸到这次 UI 打开检查。
+
+   未验证：PIE、Windows、GPU、局部空间/LWC；超过 256 项的截断实测；其他 DI 类、ArrayFloat3 各分量数值调用、复杂非用户参数连接、共享/嵌套动态输入清理；仅改内容后同步的跨发射器/多脚本压力测试；用户参数单独保存重启、Spline/ArrayFloat3 的独立保存重启、持久关卡 Actor 软引用的重启解析。本次 ArrayFloat 的持久化结果不推广到所有数据接口。
+
+   事务与回滚（scratch-10，BuildId 55116800，Mac 双架构）：写入在单独的编辑器事务中进行，先快照图、DI 实例、运行时与编译缓存副本和撤销历史；已消除事务上下文 ensure。已实测：正常设置并保存后包不脏；错误属性预校验返回 INVALID_PROPERTY 且不改数据和脏标记；干净状态下同步失败返回 DI_SYNC_FAILED，rolledBack、graphRestored、runtimeAndCacheRestored、undoHistoryRestored 全为 true，节点 37→37；回滚后撤销只撤销前一次成功操作（[31,32]→[21,22]），不崩溃；回滚后可重新创建 DI；成功后撤销恢复 linked→User.DiArr；重复设置复用同一实例；用户参数 [1,2,3]→[5,6,7,8] 复用实例且无需编译；多 DI 系统写入无 DI_SNAPSHOT_FAILED。日志新增 Ensure/Fatal/越界/Duplicate child 均为 0。
+
+   已知限制：刚撤销、包已脏且存在重做记录时如再发生同步失败，重新编译后的 DI 条目数可能与调用前不同，此时如实返回 rolledBack=false、runtimeAndCacheRestored=false，residualChanges 写明 “Compiled DI entry count differs from the original.”；图和撤销历史已恢复，包保持脏，重做可用。恢复办法（重新 set 或撤销/重做）未实测。未实测：DI_OVERRIDE_LINKS_REMAIN、CopyTo 中途失败、实例创建失败、单独编译失败路径（未做故障注入）。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

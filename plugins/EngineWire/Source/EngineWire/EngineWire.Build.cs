@@ -29,6 +29,12 @@ public class EngineWire : ModuleRules {
         PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "Json", "JsonUtilities", "LevelSequence", "MovieScene", "MovieSceneTracks", "GameplayTags", "AIModule", "Landscape" });
 
         PublicDependencyModuleNames.AddRange(new string[] { "Sequencer", "MovieSceneTools", "Niagara", "UnrealEd", "WorldPartitionEditor", "DataLayerEditor", "MaterialEditor" });
+        // UNiagaraNotifyOnChanged::OnChanged is exported by NiagaraCore, not Niagara.
+        if (Target.Version.MajorVersion == 5 && Target.Version.MinorVersion == 8)
+        {
+            PrivateDependencyModuleNames.Add("NiagaraCore");
+        }
+
 
         PrivateDependencyModuleNames.AddRange(new string[] { "ApplicationCore", "Slate", "SlateCore", "Projects", "InputCore", "DeveloperSettings", "Settings", "EngineSettings", "Sockets", "Networking", "HTTP", "EditorSubsystem", "EditorScriptingUtilities", "BlueprintGraph", "SSL", "Kismet", "KismetCompiler", "AssetRegistry", "AssetTools", "SourceControl", "AudioEditor", "AudioMixer", "PythonScriptPlugin", "GraphEditor", "UATHelper", "GameProjectGeneration" });
 

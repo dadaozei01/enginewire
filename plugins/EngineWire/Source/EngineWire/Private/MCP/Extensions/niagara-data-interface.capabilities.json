@@ -1,0 +1,355 @@
+[
+  {
+    "id": "manage_effect.set_niagara_data_interface",
+    "aliases": [],
+    "discovery": {
+      "domain": "effect",
+      "family": "niagara data interfaces",
+      "topics": [
+        "Niagara data interface",
+        "array contents",
+        "module DI input",
+        "user parameter instance",
+        "数据接口实例",
+        "数组数据"
+      ],
+      "summary": "Assign and configure a concrete Niagara data-interface instance on an emitter module input or system user parameter. Preflights all editable properties before mutation; compiles module overrides and explicitly copies content to runtime and cached default DIs, because array content does not change compile hashes. UE 5.8 only.",
+      "whenToUse": [
+        "Configure an array or spline DI instance for a module input or user parameter."
+      ],
+      "whenNotToUse": [
+        "A system editor is open: close that asset editor first.",
+        "Runtime component overrides, system-stage modules or placeholder data interfaces.",
+        "Edit a non-DI parameter, immutable or transient property."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "systemPath": {
+            "type": "string",
+            "description": "Niagara system asset path. The system editor must be closed (SYSTEM_EDITOR_OPEN otherwise)."
+          },
+          "emitterName": {
+            "type": "string",
+            "description": "Required only with moduleInput. First version supports emitter stacks only."
+          },
+          "moduleInput": {
+            "type": "string",
+            "description": "Qualified module input, e.g. HlslDiTest.Arr. Exactly one of moduleInput and userParameter is required; C++ validates the choice."
+          },
+          "userParameter": {
+            "type": "string",
+            "description": "System user parameter; accepts Arr or User.Arr. Does not require an emitter."
+          },
+          "dataInterfaceType": {
+            "type": "string",
+            "description": "Loaded concrete Niagara DI class, e.g. ArrayFloat or NiagaraDataInterfaceArrayFloat. Module default: declared input class. New user parameter: required. Existing user parameter: exact class only; modules allow a subclass of the declared type."
+          },
+          "properties": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true,
+            "description": "Editable top-level reflected DI properties. All are trial-written to a transient instance before asset mutation. Excludes EditConst, Deprecated and Transient. Soft actor references accept object-path strings. Example: {\"FloatData\":[1,2,3]}."
+          },
+          "save": {
+            "type": "boolean",
+            "description": "Save after successful compile and runtime/cache sync (omitted: true). Failed compilation/sync leaves unsaved edits in memory. User parameters need no compile."
+          }
+        },
+        "required": [
+          "action",
+          "systemPath",
+          "properties"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "inline",
+              "linked",
+              "default"
+            ]
+          },
+          "linkedParameter": {
+            "type": "string"
+          },
+          "className": {
+            "type": "string"
+          },
+          "valuesAvailable": {
+            "type": "boolean"
+          },
+          "valueNote": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-unreal-reflection-boundary": true
+            },
+            "description": "Each property: name, type, value. arrayLengths records path, true length, returnedLength and truncated; each reflected array is capped at 256. Unresolvable links/defaults have valuesAvailable=false and null property values, never invented runtime values."
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "compileOk": {
+            "type": "boolean"
+          },
+          "compiledScripts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-unreal-reflection-boundary": true
+            }
+          },
+          "runtimeSynced": {
+            "type": "boolean"
+          },
+          "runtimeSyncNote": {
+            "type": "string"
+          },
+          "runtimeInstancesUpdated": {
+            "type": "integer"
+          },
+          "cachedDefaultsUpdated": {
+            "type": "integer"
+          },
+          "compileRequired": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "title": "Configure ArrayFloat contents.",
+        "input": {
+          "action": "set_niagara_data_interface",
+          "systemPath": "/Game/FX/NS_Test",
+          "emitterName": "Crowd",
+          "moduleInput": "HlslDiTest.Arr",
+          "properties": {
+            "FloatData": [
+              1,
+              2,
+              3
+            ]
+          }
+        },
+        "output": {
+          "success": true,
+          "mode": "inline",
+          "className": "NiagaraDataInterfaceArrayFloat",
+          "valuesAvailable": true,
+          "properties": []
+        }
+      }
+    ],
+    "availability": {
+      "requiredPlugins": [
+        "Niagara"
+      ],
+      "editorStates": [
+        "edit"
+      ]
+    },
+    "behavior": {
+      "effect": "write",
+      "idempotency": "non-idempotent",
+      "longRunning": true,
+      "safeToRetry": false
+    },
+    "policy": {
+      "requiredScope": "write",
+      "consent": "none",
+      "dataAccess": "project-write"
+    },
+    "cost": {
+      "latency": "interactive",
+      "resources": "medium"
+    },
+    "routing": {
+      "parentTool": "manage_effect",
+      "dispatchAction": "set_niagara_data_interface"
+    }
+  },
+  {
+    "id": "manage_effect.get_niagara_data_interface",
+    "aliases": [],
+    "discovery": {
+      "domain": "effect",
+      "family": "niagara data interfaces",
+      "topics": [
+        "Niagara data interface",
+        "array contents",
+        "module DI input",
+        "user parameter instance",
+        "数据接口实例",
+        "数组数据"
+      ],
+      "summary": "Read the mode, linked parameter, concrete class and editable properties of a Niagara module-input or user-parameter DI without creating overrides, compiling or saving. Arrays are capped at 256 and include true lengths. Unresolvable non-user links report null values and valuesAvailable=false. UE 5.8 only.",
+      "whenToUse": [
+        "Inspect an existing DI override, user instance or graph default before editing."
+      ],
+      "whenNotToUse": [
+        "A system editor is open: close that asset editor first.",
+        "Runtime component overrides, system-stage modules or placeholder data interfaces.",
+        "Edit a non-DI parameter, immutable or transient property."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "systemPath": {
+            "type": "string",
+            "description": "Niagara system asset path. The system editor must be closed (SYSTEM_EDITOR_OPEN otherwise)."
+          },
+          "emitterName": {
+            "type": "string",
+            "description": "Required only with moduleInput. First version supports emitter stacks only."
+          },
+          "moduleInput": {
+            "type": "string",
+            "description": "Qualified module input, e.g. HlslDiTest.Arr. Exactly one of moduleInput and userParameter is required; C++ validates the choice."
+          },
+          "userParameter": {
+            "type": "string",
+            "description": "System user parameter; accepts Arr or User.Arr. Does not require an emitter."
+          },
+          "dataInterfaceType": {
+            "type": "string",
+            "description": "Loaded concrete Niagara DI class, e.g. ArrayFloat or NiagaraDataInterfaceArrayFloat. Module default: declared input class. New user parameter: required. Existing user parameter: exact class only; modules allow a subclass of the declared type."
+          }
+        },
+        "required": [
+          "action",
+          "systemPath"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "inline",
+              "linked",
+              "default"
+            ]
+          },
+          "linkedParameter": {
+            "type": "string"
+          },
+          "className": {
+            "type": "string"
+          },
+          "valuesAvailable": {
+            "type": "boolean"
+          },
+          "valueNote": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-unreal-reflection-boundary": true
+            },
+            "description": "Each property: name, type, value. arrayLengths records path, true length, returnedLength and truncated; each reflected array is capped at 256. Unresolvable links/defaults have valuesAvailable=false and null property values, never invented runtime values."
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "examples": [
+      {
+        "title": "Inspect the module DI instance.",
+        "input": {
+          "action": "get_niagara_data_interface",
+          "systemPath": "/Game/FX/NS_Test",
+          "emitterName": "Crowd",
+          "moduleInput": "HlslDiTest.Arr"
+        },
+        "output": {
+          "success": true,
+          "mode": "inline",
+          "className": "NiagaraDataInterfaceArrayFloat",
+          "valuesAvailable": true,
+          "properties": []
+        }
+      }
+    ],
+    "availability": {
+      "requiredPlugins": [
+        "Niagara"
+      ],
+      "editorStates": [
+        "edit"
+      ]
+    },
+    "behavior": {
+      "effect": "read",
+      "idempotency": "idempotent",
+      "longRunning": false,
+      "safeToRetry": true
+    },
+    "policy": {
+      "requiredScope": "read",
+      "consent": "none",
+      "dataAccess": "project-read"
+    },
+    "cost": {
+      "latency": "interactive",
+      "resources": "medium"
+    },
+    "routing": {
+      "parentTool": "manage_effect",
+      "dispatchAction": "get_niagara_data_interface"
+    }
+  }
+]

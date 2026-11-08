@@ -32,12 +32,9 @@ static bool AddUserParameter(FActionContext& Context)
 }
 
 #if MCP_HAS_NIAGARA_INPUT_OVERRIDES
-// Points a function input at a parameter, as the stack's Link Inputs menu does, so the input reads it every run.
-// Whatever fed the input before (a link, a dynamic input) goes first: the engine asserts on an override pin with links.
-static void LinkInputToParameter(UNiagaraNodeFunctionCall& Function, const FString& InputName, const FNiagaraTypeDefinition& Type, const FNiagaraVariable& Source)
+// Preserve feeders still used by other inputs. NiagaraEditor does not export its removal helper.
+void ClearNiagaraInputOverrideLinks(UEdGraphPin& OverridePin)
 {
-    UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
-        Function, FNiagaraParameterHandle(FName(*Function.GetFunctionName()), FName(*InputName)), Type, FGuid(), FGuid());
     TArray<UEdGraphNode*> Feeding;
     for (UEdGraphPin* Linked : OverridePin.LinkedTo)
     {
@@ -51,6 +48,15 @@ static void LinkInputToParameter(UNiagaraNodeFunctionCall& Function, const FStri
             Node->DestroyNode();
         }
     }
+}
+
+// Points a function input at a parameter, as the stack's Link Inputs menu does, so the input reads it every run.
+// Whatever fed the input before (a link, a dynamic input) goes first: the engine asserts on an override pin with links.
+static void LinkInputToParameter(UNiagaraNodeFunctionCall& Function, const FString& InputName, const FNiagaraTypeDefinition& Type, const FNiagaraVariable& Source)
+{
+    UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+        Function, FNiagaraParameterHandle(FName(*Function.GetFunctionName()), FName(*InputName)), Type, FGuid(), FGuid());
+    ClearNiagaraInputOverrideLinks(OverridePin);
 #if ENGINE_MINOR_VERSION >= 6
     const TSet<FNiagaraVariableBase> Known{Source};
     FNiagaraStackGraphUtilities::SetLinkedParameterValueForFunctionInput(OverridePin, Source, Known);

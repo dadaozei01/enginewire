@@ -73,6 +73,8 @@ bool IsNiagaraAuthoringSubAction(const FString& SubAction)
         TEXT("edit_niagara_scratch_module"),
         TEXT("apply_niagara_scratch_module"),
         TEXT("get_niagara_particle_data"),
+        TEXT("get_niagara_data_interface"),
+        TEXT("set_niagara_data_interface"),
         TEXT("get_niagara_scratch_module")};
     return NiagaraAuthoringActions.Contains(SubAction);
 }
