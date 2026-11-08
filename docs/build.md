@@ -49,6 +49,8 @@ BuildPlugin 产出 Universal 包。工程目录安装后编译工程，`Plugins/
 
 ## UE 5.8（Windows x64）
 
+推荐用脚本：`powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1`（`-CheckOnly` 只检查，`-Zip -Version <tag>` 打发布包），安装用 `scripts\install-enginewire.ps1`；完整步骤和 MSVC 报错处理见 [windows-update.md](windows-update.md)。两个脚本尚未在 Windows 上运行过。下面是等价的手工命令。
+
 从 `main` 分支的仓库根目录运行。已验证环境为 UE 5.8.4（BuildId 55116800）、Visual Studio C++ 工具链 14.44.35229、Windows SDK 10.0.22621.0。MSVC 安装目录名可以是 `14.44.35207`，这次构建实际使用的工具链版本是 `14.44.35229`，不属于禁用版本。Mac 编译见上一节。
 
 ```powershell

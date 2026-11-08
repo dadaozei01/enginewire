@@ -6,6 +6,10 @@
 
 跨 Agent 共享操作规范见 [ue-ai-bridge-protocol](https://github.com/dadaozei01/ue-ai-bridge-protocol/blob/main/docs/agent-entry.md)，本页负责 EngineWire 的具体调用方式。
 
+## 官方 MCP 与 EngineWire 的分工（UE 5.8）
+
+UE 5.8 官方 MCP（默认 8000/mcp，实验性、无鉴权）与 EngineWire 同时开着时，默认只用 EngineWire：官方工具集经 `list_editor_toolsets` / `call_editor_tool` 调用，不直连官方服务器，这样仍有令牌、consentGrant、撤销回执和警告。Niagara、Chaos、PIE、截图、编辑器重启、批量 Python 只走 EngineWire。蓝图、材质、网格、数据表等通用编辑，官方有正好对应的工具时经 `call_editor_tool` 调官方的，没有再用 EngineWire 自带能力。EngineWire 未安装或连不上时才直连官方，之后能接上 EngineWire 再读回或截图核对。一个任务只用一个入口，中途不换；一边报不支持，先在另一边查一次再下结论。升级引擎或启用新插件后，先用 `list_editor_toolsets` 看官方新增了哪些工具集。
+
 ## 连接
 
 1. 确认目标工程和引擎版本，避免连错同时打开的 UE。先检查工程已有自动化入口，保留原有入口。

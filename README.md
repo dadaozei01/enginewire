@@ -34,4 +34,5 @@
 - [Codex 配置与认证](docs/codex.md)
 - [Claude Code 配置与认证](docs/claude-code.md)
 - [Windows / Mac 编译方法](docs/build.md)
+- [Windows 更新到最新版（给 Agent 的分步手册）](docs/windows-update.md)
 - [来源、兼容修改与验证范围](UPSTREAM.md)
