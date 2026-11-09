@@ -27,9 +27,9 @@ function listeningPid(port) {
 function processInfo(pid) {
   if (process.platform === 'win32') {
     const ps = '[Console]::OutputEncoding=[Text.Encoding]::UTF8;' +
-      '$p=Get-CimInstance Win32_Process -Filter "ProcessId=' + pid + '";$p.Name;$p.CommandLine';
-    const [name = '', cmdline = ''] = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]).split(/\r?\n/);
-    return { name, cmdline };
+      '$p=Get-CimInstance Win32_Process -Filter "ProcessId=' + pid + '";$p.Name;$p.CommandLine;$p.ExecutablePath';
+    const [name = '', cmdline = '', exePath = ''] = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]).split(/\r?\n/);
+    return { name, cmdline, exePath };
   }
   return { name: path.basename(run('ps', ['-p', String(pid), '-o', 'comm=']).trim()),
     cmdline: run('ps', ['-p', String(pid), '-o', 'args=']).trim() };
@@ -64,14 +64,27 @@ function projectFromOpenFiles(pid) {
   return [...projects][0];
 }
 
+// A Windows editor started with no project (it opens the last one by itself) keeps its Saved folder,
+// and so the token, under %LOCALAPPDATA%\UnrealEngine\<major.minor>, not under the project.
+function engineUserDir(exePath) {
+  const engineDir = path.resolve(path.dirname(exePath), '..', '..');
+  const version = JSON.parse(fs.readFileSync(path.join(engineDir, 'Build', 'Build.version'), 'utf8'));
+  const dir = path.join(process.env.LOCALAPPDATA || '', 'UnrealEngine', version.MajorVersion + '.' + version.MinorVersion);
+  if (!fs.existsSync(path.join(dir, 'Saved', 'MCP'))) {
+    throw new Error('Editor command line has no .uproject and ' + path.join(dir, 'Saved', 'MCP') + ' does not exist; pass the .uproject path');
+  }
+  return dir;
+}
+
 // With no project given, use the UnrealEditor that is listening on the MCP port,
 // so the token always matches whichever project is open.
 function autoProject() {
   const url = new URL(process.env.CLAUDE_CODE_MCP_SERVER_URL || process.env.UE_MCP_URL || 'http://127.0.0.1:3000/mcp');
   const pid = listeningPid(url.port || 80);
-  const { name, cmdline } = processInfo(pid);
+  const { name, cmdline, exePath } = processInfo(pid);
   if (!/^UnrealEditor/i.test(name)) throw new Error('Port owner is not UnrealEditor');
   if (process.platform === 'darwin' && !/\.uproject/i.test(cmdline)) return projectFromOpenFiles(pid);
+  if (process.platform === 'win32' && !/\.uproject/i.test(cmdline) && exePath) return engineUserDir(exePath);
   return projectFromCommandLine(cmdline);
 }
 
