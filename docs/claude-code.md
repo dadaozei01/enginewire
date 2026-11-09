@@ -44,7 +44,7 @@ $cfg = [ordered]@{ type = 'http'; url = 'http://127.0.0.1:3000/mcp'; headersHelp
 
 ### 自动识别的限制
 
-- Windows：编辑器命令行里必须带 .uproject。从 Epic 启动器、双击 .uproject 或命令行打开工程都会带；只开项目浏览器、尚未选工程时不行。
+- Windows：命令行带 .uproject 时读该工程的 `Saved\MCP`。编辑器不带工程启动、自己打开上次的工程时（日志里是 Loading recent project file），Saved 目录和令牌在 `%LOCALAPPDATA%\UnrealEngine\<主版本.次版本>\Saved\MCP`，helper 按编辑器的 Build.version 改读这里；Node 与 Python helper 均已在 UE 5.8.4 实测。只开项目浏览器、尚未选工程时不行。
 - Mac：在 Finder 双击 .uproject 时命令行不带工程路径，helper 改从编辑器打开的文件反推工程，所以工程要有自己的模块或工程目录下的插件。纯蓝图工程配引擎目录插件时可能认不出，此时在 helper 后面写上 .uproject 路径。
 - 同时开多个编辑器时不要依赖自动识别。Mac（UE 5.8.4 + 5.4.4）实测两个编辑器都能监听 3000，所有连接都进后打开的那个；令牌不匹配时返回 401。helper 发现多个监听者会直接报错。Windows 的行为未重新验证。
 - Claude Code 在会话开始或 /mcp 重连时调用 helper。换工程后要新开会话或执行 /mcp 重连，才会读到新工程的令牌。
@@ -89,4 +89,4 @@ claude mcp get unreal
 
 ## 故障定位
 
-Failed to connect：确认 UE 已启动且 3000 端口在监听，先启动 UE 再连接。401：工程路径指向了别的工程，或令牌已重新生成；自动识别时多为换了工程但没重连 MCP。helper 报 Cannot read MCP capability token 时，冒号后面是原因：Nothing is listening on port 表示 UE 或 Native MCP 未启动；Port owner is not UnrealEditor 表示端口被别的程序占用；Editor command line has no .uproject 表示编辑器未带工程参数启动，改用固定工程写法；找不到令牌文件表示工程路径错误或 Native MCP 未启动过。工具调用方式见 agent-guide.md。
+Failed to connect：确认 UE 已启动且 3000 端口在监听，先启动 UE 再连接。401：工程路径指向了别的工程，或令牌已重新生成；自动识别时多为换了工程但没重连 MCP。helper 报 Cannot read MCP capability token 时，冒号后面是原因：Nothing is listening on port 表示 UE 或 Native MCP 未启动；Port owner is not UnrealEditor 表示端口被别的程序占用；Editor command line has no .uproject 表示编辑器未带工程参数启动，且引擎用户目录下也没有 `Saved\MCP`，改用固定工程写法；找不到令牌文件表示工程路径错误或 Native MCP 未启动过。工具调用方式见 agent-guide.md。
