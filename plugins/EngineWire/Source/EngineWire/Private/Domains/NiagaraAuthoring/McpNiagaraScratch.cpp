@@ -102,11 +102,15 @@ const UEdGraphSchema_Niagara* NiagaraSchema()
     return GetDefault<UEdGraphSchema_Niagara>();
 }
 
+// Same value as UEdGraphSchema_Niagara::PinCategoryMisc. Importing that static FName from NiagaraEditor
+// breaks /DELAYLOAD on Win64 (LNK1194: data symbols cannot be delay-loaded).
+static const FName NiagaraScratchPinCategoryMisc(TEXT("Misc"));
+
 UEdGraphPin* FindAddPin(UEdGraphNode* Node, EEdGraphPinDirection Direction)
 {
     for (UEdGraphPin* Pin : Node->Pins)
     {
-        if (Pin->Direction == Direction && Pin->PinType.PinCategory == UEdGraphSchema_Niagara::PinCategoryMisc && Pin->PinName == TEXT("Add"))
+        if (Pin->Direction == Direction && Pin->PinType.PinCategory == NiagaraScratchPinCategoryMisc && Pin->PinName == TEXT("Add"))
         {
             return Pin;
         }
@@ -439,7 +443,7 @@ TSharedPtr<FJsonObject> DescribeGraph(UNiagaraGraph* Graph)
         TArray<TSharedPtr<FJsonValue>> Pins;
         for (UEdGraphPin* Pin : Node->Pins)
         {
-            if (Pin->bHidden || Pin->PinType.PinCategory == UEdGraphSchema_Niagara::PinCategoryMisc)
+            if (Pin->bHidden || Pin->PinType.PinCategory == NiagaraScratchPinCategoryMisc)
             {
                 continue;
             }
