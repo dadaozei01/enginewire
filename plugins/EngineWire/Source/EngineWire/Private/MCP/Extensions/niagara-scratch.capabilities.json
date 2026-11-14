@@ -16,9 +16,11 @@
     "niagara module graph",
     "create scratch module",
     "custom hlsl",
-    "niagara hlsl"
+    "niagara hlsl",
+    "simulation stage module",
+    "仿真阶段模块"
    ],
-   "summary": "Make a Scratch module on a Niagara system: its script lives in System.ScratchPadScripts, the list the system editor shows under Local Modules (a script on an emitter runs but never shows there). Goes on the stage's stack (emitterName unless a System stage; addToStack false leaves it unused) with no inputs yet; operations can build its graph in the same call. Nothing is compiled or saved until apply_niagara_scratch_module. An open editor of the system is refused (SYSTEM_EDITOR_OPEN), a taken name is NAME_TAKEN. Scratch input pins can carry concrete data-interface types; creating/configuring their instances is not included.",
+   "summary": "Make a Scratch module on a Niagara system: its script lives in System.ScratchPadScripts, the list the system editor shows under Local Modules (a script on an emitter runs but never shows there). Goes on the stage's stack (emitterName unless a System stage; addToStack false leaves it unused), which can be one of the emitter's simulation stages so a solver pass iterates. It starts with no inputs; operations can build its graph in the same call. Nothing is compiled or saved until apply_niagara_scratch_module. An open editor of the system is refused (SYSTEM_EDITOR_OPEN), a taken name is NAME_TAKEN. Scratch input pins can carry concrete data-interface types; creating/configuring their instances is not included.",
    "whenToUse": [
     "A particle needs logic no stock module has: a module with its own inputs and a graph of map reads, ops, branches and function calls."
    ],
@@ -54,15 +56,7 @@
      },
      "stage": {
       "type": "string",
-      "enum": [
-       "ParticleSpawn",
-       "ParticleUpdate",
-       "EmitterSpawn",
-       "EmitterUpdate",
-       "SystemSpawn",
-       "SystemUpdate"
-      ],
-      "description": "The stage it runs in (default ParticleUpdate)."
+      "description": "The stage it runs in (default ParticleUpdate): ParticleSpawn, ParticleUpdate, EmitterSpawn, EmitterUpdate, SystemSpawn, SystemUpdate, or the name of one of the emitter's simulation stages (as get_niagara_info lists under simulationStages; 'SimulationStage:<Name>' also works). An unknown name is STAGE_NOT_FOUND with the emitter's stage names."
      },
      "addToStack": {
       "type": "boolean",

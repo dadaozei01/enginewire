@@ -94,3 +94,9 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 发射器开关：`edit_niagara_system edit=set_emitter_properties` 的 `emitterProperties` 接受 `enabled`、`localSpace`、`determinism`（布尔）和 `moduleEnabled`（{模块名: 布尔}），会重编译；其他属性用 set_parameter_value 或 inspect.set_property。`create_effect kind=niagara_emitter` 会给空的精灵材质槽填默认精灵材质。截图看不到粒子时，先用 control_editor configure_editor setting=window unthrottle 再开视口 realtime。GPU 发射器的粒子数据读不到（NOT_SUPPORTED），只能截图核对。
 
 成功删除为一个撤销步骤，请求编译并标脏，始终 saved=false。检查 compileOk、warnings、diEntriesBefore/After、diEntriesConsistent；原 DI 数据的撤销恢复和编译状态须读回验证。编译中的内联 DI 与用户 DI 是不同集合，不能用两个总数相等作为一致性判据。扫描为保守的本系统/递归脚本图与绑定检查，不是工程范围、外部 HLSL include 或宏的语义引用分析，详见 UPSTREAM 24。仅在用户授权时单独保存目标系统。
+
+## Niagara 逐帧验证与仿真阶段（UE 5.8）
+
+- 看 GPU 发射器的数值：`set_niagara_sim_target target=CPU`（建议在测试副本上），然后用 `step_niagara_simulation reset=true` 让放置的组件重新开始（切换并重编译后旧实例失效，直接读会 SYSTEM_NOT_ACTIVE），再用 `get_niagara_particle_data` 不带 advanceTicks 读。看完 `target=GPU` 切回。CPU 上用了 GPU 专用函数的仿真阶段或 HLSL 会编译失败，看回执 compiledScripts。
+- 逐帧：`step_niagara_simulation frames=1` 推进后组件保持暂停，两次调用之间编辑器不会推进它；`frames=0` 只改暂停状态或截图，`pause=false` 让它继续跑。`screenshot` 传 true 或 control_editor 截图参数，同一回执返回暂停帧的图。GPU 发射器的 numParticles 是回读计数，暂停时可能为 0。截图前先 `configure_editor setting=window unthrottle`。
+- 仿真阶段：`add_niagara_module moduleKind=simulation_stage stageName=X` 新建，`create_niagara_scratch_module stage=X` 把 Scratch 模块放进去，`set_niagara_simulation_stage` 设 numIterations / enabled。`get_niagara_info` 的模块带 stage、simulationStage、stageIndex，发射器带 simulationStages，渲染器带 facingMode、alignment、锁定轴和 bindings（这些字段在回执 details 里）。

@@ -184,6 +184,20 @@ void ClearNiagaraInputOverrideLinks(UEdGraphPin& OverridePin);
 #if ENGINE_MINOR_VERSION >= 8
 FNiagaraTypeDefinition ResolveScratchType(const FString& Name);
 bool RefuseWhileEditorOpen(FActionContext& Context, UNiagaraSystem* System);
+// In McpNiagaraScratch.cpp: script usage and compile status as the replies spell them.
+const TCHAR* NiagaraUsageText(ENiagaraScriptUsage Usage);
+const TCHAR* NiagaraCompileStatusText(ENiagaraScriptCompileStatus Status);
+// Compiles System, waits, and lists each script with errors or warnings in OutReports (script, usage, status, errors,
+// warnings); OnError sees every error event. True when no script has an error.
+bool CompileSystemAndCollect(UNiagaraSystem* System, TArray<TSharedPtr<FJsonValue>>& OutReports,
+    TFunctionRef<void(const FNiagaraCompileEvent&)> OnError);
+// In McpNiagaraSimControl.cpp. The Niagara component actorName (label, object name or path) names in the PIE world when
+// one runs, else the editor world; componentName picks one of several, else the actor must have exactly one. On a miss
+// sends the refusal (listing actors or components) and returns nullptr.
+UNiagaraComponent* ResolveWorldNiagaraComponent(FActionContext& Context, const FString& ActorName, const FString& ComponentName,
+    UWorld*& OutWorld, AActor*& OutActor);
+// enable_gpu_simulation and set_niagara_sim_target: switch an emitter to target (CPU or GPU, default GPU), compile, reply.
+bool SetEmitterSimTarget(FActionContext& Context);
 #endif
 #endif
 // The names ResolveNiagaraTypeByName takes, for an error message.
@@ -281,4 +295,8 @@ bool HandleInfoValidationAction(FActionContext& Context, const FString& SubActio
 bool HandleScratchAction(FActionContext& Context, const FString& SubAction);
 bool HandleDataInterfaceConfigAction(FActionContext& Context, const FString& SubAction);
 bool HandleParticleDataAction(FActionContext& Context, const FString& SubAction);
+// In McpNiagaraSimControl.cpp: step_niagara_simulation (a placed component, before the asset-path checks), and
+// set_niagara_sim_target / set_niagara_simulation_stage (a system asset).
+bool HandleSimulationControlAction(FActionContext& Context, const FString& SubAction);
+bool HandleSimulationSettingsAction(FActionContext& Context, const FString& SubAction);
 }

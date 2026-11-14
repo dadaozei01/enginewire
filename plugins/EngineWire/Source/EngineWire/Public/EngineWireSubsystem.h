@@ -304,6 +304,7 @@ private:
 
   friend struct FMcpLevelHandlerAccess;
   friend struct FMcpUiHandlerAccess;
+  friend struct FMcpNiagaraHandlerAccess;
   friend class FMcpNativeTransport;
   friend class FMcpAutomationShutdownCancellationTest;
 };

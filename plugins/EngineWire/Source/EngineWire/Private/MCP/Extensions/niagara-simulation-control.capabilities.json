@@ -1,0 +1,604 @@
+[
+ {
+  "id": "manage_effect.set_niagara_sim_target",
+  "aliases": [
+   "manage_effect.set_niagara_simulation_target"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara runtime",
+   "topics": [
+    "cpu simulation",
+    "gpu simulation",
+    "sim target",
+    "switch emitter to cpu",
+    "CPU 粒子",
+    "GPU 粒子",
+    "切换模拟目标"
+   ],
+   "summary": "Switch one emitter of a Niagara system between CPU and GPU simulation, as the emitter's details panel does (Sim Target), then compile the system and report each script's errors. CPU emitters can be read particle by particle with get_niagara_particle_data; GPU emitters cannot, so switch a copy to CPU to check numbers, and back to GPU for scale. Saved only when the compile is clean. Simulation stages and Custom HLSL that use GPU-only functions fail to compile on CPU: compiledScripts names them.",
+   "whenToUse": [
+    "A GPU emitter's particle values must be checked numerically: switch it (or a test copy) to CPU, advance and read.",
+    "An emitter must go back to GPU for large counts."
+   ],
+   "whenNotToUse": [
+    "Only reading which target an emitter has: get_niagara_info lists simulationTarget."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action on manage_effect."
+     },
+     "target": {
+      "type": "string",
+      "enum": [
+       "CPU",
+       "GPU"
+      ],
+      "description": "The simulation target to set."
+     },
+     "fixedBoundsEnabled": {
+      "type": "boolean",
+      "description": "Also set the system's fixed bounds flag (GPU emitters need fixed bounds)."
+     },
+     "deterministicEnabled": {
+      "type": "boolean",
+      "description": "Also set the system's determinism flag."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "Canonical /Game Niagara System asset path."
+     },
+     "emitterName": {
+      "type": "string",
+      "description": "The emitter, by the name get_niagara_info lists; the only emitter when omitted."
+     },
+     "save": {
+      "type": "boolean",
+      "description": "Save after a clean compile (default true); false leaves the change in memory."
+     }
+    },
+    "required": [
+     "action",
+     "systemPath",
+     "target"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "simTarget": {
+      "type": "string",
+      "enum": [
+       "CPU",
+       "GPU"
+      ]
+     },
+     "previousSimTarget": {
+      "type": "string",
+      "enum": [
+       "CPU",
+       "GPU"
+      ]
+     },
+     "changed": {
+      "type": "boolean"
+     },
+     "gpuEnabled": {
+      "type": "boolean"
+     },
+     "fixedBoundsEnabled": {
+      "type": "boolean"
+     },
+     "deterministicEnabled": {
+      "type": "boolean"
+     },
+     "compileOk": {
+      "type": "boolean",
+      "description": "True when no script of the system has a compile error."
+     },
+     "compiledScripts": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "Each script with errors or warnings: {script, usage, status, errors, warnings}."
+     },
+     "saved": {
+      "type": "boolean",
+      "description": "Saved to disk: only a clean compile with save not false."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Switch a crowd emitter to CPU to read its particles.",
+    "input": {
+     "action": "set_niagara_sim_target",
+     "systemPath": "/Game/MCPTest/NS_Battle",
+     "emitterName": "ArmyA",
+     "target": "CPU"
+    },
+    "output": {
+     "success": true,
+     "simTarget": "CPU",
+     "previousSimTarget": "GPU",
+     "changed": true,
+     "compileOk": true,
+     "saved": true
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "idempotent",
+   "longRunning": false,
+   "safeToRetry": true
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "set_niagara_sim_target"
+  }
+ },
+ {
+  "id": "manage_effect.step_niagara_simulation",
+  "aliases": [
+   "manage_effect.step_niagara"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara runtime",
+   "topics": [
+    "step niagara",
+    "advance frames",
+    "pause niagara",
+    "frame by frame",
+    "lock frame",
+    "逐帧推进",
+    "暂停粒子",
+    "锁帧截图"
+   ],
+   "summary": "Advance a placed Niagara component by whole frames (frames x deltaTime) and pause it afterwards, in PIE when it runs, else the editor world. A paused component is skipped by the world tick, so the realtime editor viewport no longer moves it between calls: consecutive steps are adjacent frames, and get_niagara_particle_data (without advanceTicks) reads exactly the stepped frame. screenshot takes the picture of the paused frame in the same call (control_editor screenshot options; the image comes back with the step result). frames 0 only applies pause/screenshot; pause false lets it run on. The reply gives ageBefore, age, paused and each emitter's particle count (a GPU count trails by a frame or two).",
+   "whenToUse": [
+    "Check a simulation frame by frame: step 1 frame, read particles or take a screenshot, step again.",
+    "Compare a CPU and a GPU emitter at the same age.",
+    "Freeze an effect at a chosen age for a screenshot."
+   ],
+   "whenNotToUse": [
+    "Previewing at a coarse age without pausing: advance_simulation.",
+    "Stepping the whole game (actors, physics): control_editor set_game_speed / step_frame in PIE."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action on manage_effect."
+     },
+     "actorName": {
+      "type": "string",
+      "description": "Actor label, object name or full path in PIE if running, otherwise the editor world."
+     },
+     "componentName": {
+      "type": "string",
+      "description": "Which Niagara component when the actor has several."
+     },
+     "frames": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000,
+      "default": 1,
+      "description": "Frames to advance (0 = none, only pause/screenshot)."
+     },
+     "deltaTime": {
+      "type": "number",
+      "maximum": 1,
+      "description": "Seconds per frame (default 1/60)."
+     },
+     "reset": {
+      "type": "boolean",
+      "description": "Restart the system from age 0 first."
+     },
+     "pause": {
+      "type": "boolean",
+      "default": true,
+      "description": "Leave the component paused after stepping (default true); false resumes normal ticking."
+     },
+     "screenshot": {
+      "type": [
+       "boolean",
+       "object"
+      ],
+      "x-unreal-reflection-boundary": true,
+      "description": "true, or control_editor screenshot options (mode, resolution, location, rotation, filename, keepFile, returnBase64): capture the stepped frame in this call."
+     }
+    },
+    "required": [
+     "action",
+     "actorName"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "world": {
+      "type": "string"
+     },
+     "worldType": {
+      "type": "string",
+      "enum": [
+       "Editor",
+       "PIE"
+      ]
+     },
+     "actorName": {
+      "type": "string"
+     },
+     "componentName": {
+      "type": "string"
+     },
+     "frames": {
+      "type": "integer"
+     },
+     "deltaTime": {
+      "type": "number"
+     },
+     "ageBefore": {
+      "type": "number"
+     },
+     "age": {
+      "type": "number"
+     },
+     "paused": {
+      "type": "boolean"
+     },
+     "complete": {
+      "type": "boolean"
+     },
+     "emitters": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "{name, simTarget, numParticles} per emitter instance."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "imageBase64": {
+      "type": "string",
+      "description": "With screenshot: the PNG."
+     },
+     "mimeType": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "width": {
+      "type": "number"
+     },
+     "height": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Three adjacent frames.",
+    "input": {
+     "action": "step_niagara_simulation",
+     "actorName": "BattleFX",
+     "frames": 1
+    },
+    "output": {
+     "success": true,
+     "ageBefore": 1.0,
+     "age": 1.0166667,
+     "paused": true
+    }
+   },
+   {
+    "title": "Step 30 frames and photograph the frame.",
+    "input": {
+     "action": "step_niagara_simulation",
+     "actorName": "BattleFX",
+     "frames": 30,
+     "screenshot": {
+      "location": {
+       "x": 0,
+       "y": -2000,
+       "z": 800
+      },
+      "rotation": {
+       "pitch": -20,
+       "yaw": 90,
+       "roll": 0
+      }
+     }
+    },
+    "output": {
+     "success": true,
+     "age": 0.5,
+     "paused": true,
+     "mimeType": "image/png"
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit",
+    "play"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "non-idempotent",
+   "longRunning": false,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-read"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "step_niagara_simulation"
+  }
+ },
+ {
+  "id": "manage_effect.set_niagara_simulation_stage",
+  "aliases": [
+   "manage_effect.configure_niagara_simulation_stage"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara runtime",
+   "topics": [
+    "simulation stage",
+    "num iterations",
+    "stage iterations",
+    "enable simulation stage",
+    "仿真阶段",
+    "迭代次数"
+   ],
+   "summary": "Set an emitter simulation stage's iteration count (numIterations, a fixed number: the stage runs that many times per frame, as a constraint or collision solver needs) and whether it is enabled, then compile and report each script's errors. The stage is named as get_niagara_info lists it under simulationStages; add one with add_niagara_module moduleKind=simulation_stage and put a Scratch module in it with create_niagara_scratch_module stage=<stage name>. A count bound to a parameter is refused (NUM_ITERATIONS_BOUND).",
+   "whenToUse": [
+    "A collision or separation pass must run several times per frame.",
+    "A simulation stage must be switched off to compare with and without it."
+   ],
+   "whenNotToUse": [
+    "Adding a stage: add_niagara_module moduleKind=simulation_stage."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action on manage_effect."
+     },
+     "stageName": {
+      "type": "string",
+      "description": "The simulation stage's name."
+     },
+     "numIterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "Times the stage runs per frame."
+     },
+     "enabled": {
+      "type": "boolean",
+      "description": "Whether the stage runs."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "Canonical /Game Niagara System asset path."
+     },
+     "emitterName": {
+      "type": "string",
+      "description": "The emitter, by the name get_niagara_info lists; the only emitter when omitted."
+     },
+     "save": {
+      "type": "boolean",
+      "description": "Save after a clean compile (default true); false leaves the change in memory."
+     }
+    },
+    "required": [
+     "action",
+     "systemPath",
+     "stageName"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "stageName": {
+      "type": "string"
+     },
+     "numIterations": {
+      "type": "integer"
+     },
+     "enabled": {
+      "type": "boolean"
+     },
+     "compileOk": {
+      "type": "boolean",
+      "description": "True when no script of the system has a compile error."
+     },
+     "compiledScripts": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "Each script with errors or warnings: {script, usage, status, errors, warnings}."
+     },
+     "saved": {
+      "type": "boolean",
+      "description": "Saved to disk: only a clean compile with save not false."
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Solve crowd collisions four times per frame.",
+    "input": {
+     "action": "set_niagara_simulation_stage",
+     "systemPath": "/Game/MCPTest/NS_Battle",
+     "emitterName": "ArmyA",
+     "stageName": "Separate",
+     "numIterations": 4
+    },
+    "output": {
+     "success": true,
+     "stageName": "Separate",
+     "numIterations": 4,
+     "enabled": true,
+     "compileOk": true,
+     "saved": true
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "idempotent",
+   "longRunning": false,
+   "safeToRetry": true
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "set_niagara_simulation_stage"
+  }
+ }
+]

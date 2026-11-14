@@ -42,6 +42,7 @@ bool UEngineWireSubsystem::HandleManageNiagaraAuthoringAction(
         McpNiagaraAuthoringHandlers::MakeActionContext(this, RequestId, Payload, RequestingSocket);
     Context.SubAction = SubAction;
     if (McpNiagaraAuthoringHandlers::HandleParticleDataAction(Context, SubAction)) return true;
+    if (McpNiagaraAuthoringHandlers::HandleSimulationControlAction(Context, SubAction)) return true;
     if (!McpNiagaraAuthoringHandlers::ValidateCommonFields(Context))
     {
         return true;
@@ -56,6 +57,7 @@ bool UEngineWireSubsystem::HandleManageNiagaraAuthoringAction(
     if (McpNiagaraAuthoringHandlers::HandleDataInterfaceAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleEventAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleSimulationAction(Context, SubAction)) return true;
+    if (McpNiagaraAuthoringHandlers::HandleSimulationSettingsAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleInfoValidationAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleDataInterfaceConfigAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleScratchAction(Context, SubAction)) return true;

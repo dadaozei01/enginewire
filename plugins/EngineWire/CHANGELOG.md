@@ -6,6 +6,14 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 
 ## [Unreleased]
 
+### Added (Niagara simulation control, UE 5.8 fork)
+- `set_niagara_sim_target` switches an emitter between CPU and GPU through the emitter's own change handler, compiles, and reports per-script errors; saved only on a clean compile. `enable_gpu_simulation` uses the same path (default GPU) and now recompiles.
+- `step_niagara_simulation` advances a placed component by whole frames and pauses it, so consecutive calls are adjacent frames even with a realtime viewport; `screenshot` captures the paused frame in the same call.
+- `set_niagara_simulation_stage` sets a simulation stage's iteration count and enabled state.
+- `get_niagara_info` reports each module's stage, simulation stage and order, each emitter's simulation stages, and renderer facing/alignment/locked-axis settings and orientation bindings.
+- `create_niagara_scratch_module` accepts a simulation stage name for `stage`.
+- Verified on BP_Test 5.8.4 Mac (UPSTREAM item 26).
+
 ### Added (Niagara data-interface instances, UE 5.8 fork)
 - `set_niagara_data_interface` configures concrete DI instances on emitter module inputs or system user parameters after transient property validation; `get_niagara_data_interface` reads inline/linked/default mode and editable properties, with array length/truncation metadata. Module updates compile and explicitly synchronize runtime and cached-default DIs; user parameters do not require an emitter or an explicit compile. Adds the existing NiagaraCore link dependency for OnChanged.
 - Verified on BP_Test 5.8.4 Mac with scratch-8d: ArrayFloat Length gives particle Z=1003, then 1005 after a content-only edit with the graph unchanged; Get(1) gives Z=1020 before and after save/editor restart. A linked four-element User.DiArr gives Z=1004; a two-element ArrayFloat3 gives Z=1002; a 300-unit temporary spline via SoftSourceActor gives Z=1300. Each snapshot contains 31 particles. Invalid classes/properties/value types and non-DI inputs are refused without changing readback. Temporary actors removed; no level saved; no new Ensure/Fatal/out-of-bounds diagnostics in test log increments. User confirmed the system editor/module graph opens and the editor stays responsive, but that UI check added the known Duplicate child Distance Distribution Mode ensure and a CrashReportClientEditor crash (FScheduler::StopWorkers in the faulting thread). The clean log statement above covers numerical tests only. Remaining unverified cases are in UPSTREAM item 23.

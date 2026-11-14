@@ -9,7 +9,7 @@
 - 上游：[ChiR24/Unreal_mcp](https://github.com/ChiR24/Unreal_mcp)。本仓库固定在 v0.6.0（2026-10-27 正式版）。
 - 截至 2026-11-08，上游已有 v0.6.1-beta-a（11-06，164 个提交，改动 767 个文件）和 v0.6.1-beta-b（11-08），均为预发布。
 - 决定：**暂不升级**。等 v0.6.1 出正式版，再照升 v0.6.0 时的办法，逐条核对 [UPSTREAM.md](../UPSTREAM.md) 里的修改。
-- 升级时要移植的本仓库自有功能（上游没有）：Chaos Geometry Collection 破碎（第 16 项），Niagara Scratch / Custom HLSL / 数据接口 / 粒子快照 / 用户参数 / LocalSpace（第 19–25 项）。上游复制发射器时，如果发射器用到系统级 Scratch 模块，会直接报 `UNSUPPORTED_EMITTER` 拒绝复制（`McpNiagaraEmitterCopy.cpp`）。
+- 升级时要移植的本仓库自有功能（上游没有）：Chaos Geometry Collection 破碎（第 16 项），Niagara Scratch / Custom HLSL / 数据接口 / 粒子快照 / 用户参数 / LocalSpace（第 19–25 项），Niagara 模拟控制（CPU/GPU 切换、逐帧锁定、仿真阶段，第 26 项；改了 `EngineWireSubsystem.h` 的 friend 和截图回执的 `_mcpCarry`）。上游复制发射器时，如果发射器用到系统级 Scratch 模块，会直接报 `UNSUPPORTED_EMITTER` 拒绝复制（`McpNiagaraEmitterCopy.cpp`）。
 - 上游 beta-b 仍未修复、升级后需要重新打的补丁：中文分类名读写（第 8 项，上游没有 EditorCategoryUtils 换回英文的逻辑）；Windows 上 StateTree 的 LNK1194（上游仍直接引用 `OnRequestCompile`）；UE 5.4 `.uplugin` 里对 PropertyBindingUtils 的可选引用（上游仍有），仅影响 5.4，低优先级。第 7 项传输层关闭竞态：上游加了 `WaitForCompletion`，但仍保留 `Kill(true)`，要逐行核对。第 9–15 项和上游的 graph-as-code 修复（下划线 id 等）可能有重叠，要逐条对比。
 - 上游 v0.6.1 的迁移注意点：Movie Render Queue、Takes、MetaSound 改为必需插件；写入的返回里只带 lint 错误，不再带警告；超过 1023 字符的字符串、个数不对的向量或颜色数组会被拒绝；`add_keyframe` 必须带 `property`；没有 `write` 权限的作用域令牌，不能再执行带 `path` 的 `screenshot`、`export_level` 等。
 
@@ -36,3 +36,4 @@
 - Niagara Scratch 系列（第 19–25 项）只在 Mac UE 5.8 上测过；Windows 还没编译，5.4 没有这些功能。
 - 编辑器长时间运行后退出的稳定性，Windows 上没有专门观察过。
 - 插件装在引擎目录时的情况；Fracture 和 PlanarCut 真正缺失时能否启动。
+- Niagara 模拟控制（第 26 项）只在 Mac UE 5.8 编译实测；PIE 中逐帧、局部空间、多组件 componentName 和 Windows 编译未验证。

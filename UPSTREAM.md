@@ -175,4 +175,20 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    C 轮实测（scratch-11，Claude 经 MCP，测试资产已删除）：最小 GPU 系统中 ParticleUpdate 阶段 Custom HLSL Scratch 写 Particles.Color / SpriteSize 生效（填默认精灵材质后可见红色）；PIE 中 get_niagara_particle_data 读到 Scratch 计算的位置、日志无 Niagara 错误；位于 (1e6,1e6,100) 的 CPU 系统用 HLSL 读写 Position，x/y 精确保持 1e6、z 均匀上升。GPU 的 particle reader 返回 NOT_SUPPORTED。依赖无源 SampleSpline 的 NS_ScratchHlsl 改 GPU 后不出粒子，未确认原因。validate 在该 GPU 拷贝上触发一次引擎 ensure（NiagaraStackEntry.cpp:832 Duplicate child Distance Distribution Mode，经 CollectNiagaraSystemStackIssues），未修。
 
+26. Niagara 两军对战第一期：CPU/GPU 双向切换、逐帧锁定、阶段读回、Scratch 进仿真阶段（2026-11-14，UE 5.8.4 Mac，分支 `feat/niagara-battle-ue58`）。代码在 `McpNiagaraSimControl.cpp`（新）、`McpNiagaraModuleInfo.cpp`、`McpNiagaraInfoValidate.cpp`、`McpNiagaraScratch.cpp`，能力记录在 `MCP/Extensions/niagara-simulation-control.capabilities.json`。上游到 0.6.1-beta-b 都没有这些。
+
+   - `set_niagara_sim_target`（write）：`target` CPU/GPU，按详情面板同一路径（写 SimTarget 后调用 `PostEditChangeVersionedProperty`，图表标记未同步），随后编译并返回 `compileOk`、逐脚本 `compiledScripts`；只有编译干净且 save 未关才保存。可同时设 `fixedBoundsEnabled` / `deterministicEnabled`，切 GPU 且无固定边界时给出警告。`enable_gpu_simulation` 改走同一函数（默认 GPU，现在也会重编译）；生成的目录分片不可改，所以 `target` 参数只在新能力上开放。
+   - `step_niagara_simulation`（write，不改资产）：按整帧推进放置的组件（`frames` 0–10000，`deltaTime` 默认 1/60，可 `reset`），推进后默认 `SetPaused(true)`。暂停的实例被世界 tick 跳过，所以两次调用之间编辑器 realtime 视口不会再推进它；推进时先临时取消暂停（AdvanceSimulation 跳过暂停实例），同步推进后再暂停。`screenshot`（true 或 control_editor 截图参数）在同一调用里截暂停帧：经子系统 friend `FMcpNiagaraHandlerAccess` 调用编辑器截图处理，推进结果经 `_mcpCarry` 合并进截图回执（`SendScreenshotReceiptForMcp`）。回执含 ageBefore/age/paused/complete 和各发射器粒子数（GPU 计数是回读值，暂停时可能为 0 或滞后）。
+   - `set_niagara_simulation_stage`（write）：按名字设置仿真阶段的 `numIterations`（1–1000，写 NumIterations 默认值并调用阶段自身的 PostEditChangeProperty）与 `enabled`（SetEnabled），然后编译、报告；迭代次数绑定到参数时以 NUM_ITERATIONS_BOUND 拒绝。
+   - `get_niagara_info`：每个模块新增 `stage`（EmitterSpawn/EmitterUpdate/ParticleSpawn/ParticleUpdate/ParticleEvent/ParticleSimulationStage，不在任何链上为 Unattached）、`simulationStage`、`stageIndex`，模块按栈顺序排列（沿每个输出节点的参数映射链回溯）；发射器新增 `simulationStages`（name、enabled、usageId、moduleCount、iterationSource、numIterations 或 numIterationsBinding）；渲染器新增 facingMode、alignment、sortMode、lockedAxisEnable/lockedAxis/lockedAxisSpace、`bindings`（精灵 spriteFacing/spriteAlignment/spriteRotation/velocity，网格 meshOrientation/velocity/scale）和网格的 `meshes`。生成的输出分片未声明这些字段，经 `details` 返回。
+   - `create_niagara_scratch_module` 的 `stage` 可填发射器仿真阶段名（或 `SimulationStage:<名字>`），按阶段脚本的 UsageId 找输出节点插入；找不到返回 STAGE_NOT_FOUND 并列出阶段名。编译结果收集抽成共用 `CompileSystemAndCollect`。
+
+   实测（Claude 经 MCP，编辑器临时世界，测试资产 `/Game/MCPTest/E_BattleP1`、`NS_BattleP1`）：
+   1. GPU 发射器读粒子返回 NOT_SUPPORTED；切 CPU（compileOk、saved）后 step reset 60 帧，`get_niagara_particle_data` 不推进读到 9 个粒子的 Position/Age。注意：切换后放置的组件需要 reset/重新激活（重编译后实例失效，读取报 SYSTEM_NOT_ACTIVE）。
+   2. 视口 realtime 并 unthrottle 后，对照：取消暂停 4 秒 age 从 1.0 到 5.059；暂停后连续 3 次 frames=1、每次间隔 3 秒，age 5.058967 → 5.075634 → 5.092300 → 5.108967，每次 +1/60（浮点误差内）。第 3 次带 screenshot，同一回执返回 PNG 和推进字段。
+   3. 切回 GPU，`add_niagara_module moduleKind=simulation_stage` 建 Separate，Custom HLSL Scratch（Position + (0,0,0.5)）放入该阶段，apply compileOk；numIterations=4 编译通过。info 显示 SeparateHlsl 在 ParticleSimulationStage/Separate 第 0 位，simulationStages 中 numIterations 4；精灵与网格渲染器朝向字段正确。GPU 运行 60 帧截图可见粒子网格。
+   4. 错误路径：不存在的阶段名对 Scratch 与 set_niagara_simulation_stage 都返回 STAGE_NOT_FOUND 并列出 [Separate]。
+
+   编译说明：沙箱内 UBA 绑定 0.0.0.0 时 UBT 的 dotnet 段错误退出；测试版用 UBT 直接编译加 `-NoUBA`（arm64）。生成的分片头文件改动后若同步保留旧时间戳，含它的编译单元可能不重编，导致 CANONICAL_RECORDS_UNAVAILABLE（记录数不一致）；同步需按内容比较或 touch。发布用 Universal 包仍需 `scripts/build-ue58-mac.sh`。未验证：PIE 中逐帧、局部空间、多组件 componentName、Windows 编译。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。

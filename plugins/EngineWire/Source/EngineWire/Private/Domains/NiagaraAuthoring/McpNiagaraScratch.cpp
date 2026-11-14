@@ -67,6 +67,90 @@ bool RefuseWhileEditorOpen(FActionContext& Context, UNiagaraSystem* System)
     return false;
 }
 
+const TCHAR* NiagaraUsageText(ENiagaraScriptUsage Usage)
+{
+    switch (Usage)
+    {
+    case ENiagaraScriptUsage::Function: return TEXT("Function");
+    case ENiagaraScriptUsage::Module: return TEXT("Module");
+    case ENiagaraScriptUsage::DynamicInput: return TEXT("DynamicInput");
+    case ENiagaraScriptUsage::ParticleSpawnScript: return TEXT("ParticleSpawn");
+    case ENiagaraScriptUsage::ParticleSpawnScriptInterpolated: return TEXT("ParticleSpawnInterpolated");
+    case ENiagaraScriptUsage::ParticleUpdateScript: return TEXT("ParticleUpdate");
+    case ENiagaraScriptUsage::ParticleEventScript: return TEXT("ParticleEvent");
+    case ENiagaraScriptUsage::ParticleSimulationStageScript: return TEXT("ParticleSimulationStage");
+    case ENiagaraScriptUsage::ParticleGPUComputeScript: return TEXT("ParticleGPUCompute");
+    case ENiagaraScriptUsage::EmitterSpawnScript: return TEXT("EmitterSpawn");
+    case ENiagaraScriptUsage::EmitterUpdateScript: return TEXT("EmitterUpdate");
+    case ENiagaraScriptUsage::SystemSpawnScript: return TEXT("SystemSpawn");
+    case ENiagaraScriptUsage::SystemUpdateScript: return TEXT("SystemUpdate");
+    default: return TEXT("Other");
+    }
+}
+
+const TCHAR* NiagaraCompileStatusText(ENiagaraScriptCompileStatus Status)
+{
+    switch (Status)
+    {
+    case ENiagaraScriptCompileStatus::NCS_Dirty: return TEXT("Dirty");
+    case ENiagaraScriptCompileStatus::NCS_Error: return TEXT("Error");
+    case ENiagaraScriptCompileStatus::NCS_UpToDate: return TEXT("UpToDate");
+    case ENiagaraScriptCompileStatus::NCS_BeingCreated: return TEXT("BeingCreated");
+    case ENiagaraScriptCompileStatus::NCS_UpToDateWithWarnings: return TEXT("UpToDateWithWarnings");
+    case ENiagaraScriptCompileStatus::NCS_ComputeUpToDateWithWarnings: return TEXT("ComputeUpToDateWithWarnings");
+    default: return TEXT("Unknown");
+    }
+}
+
+
+bool CompileSystemAndCollect(UNiagaraSystem* System, TArray<TSharedPtr<FJsonValue>>& OutReports,
+    TFunctionRef<void(const FNiagaraCompileEvent&)> OnError)
+{
+    System->RequestCompile(false);
+    System->WaitForCompilationComplete(false, false);
+    bool bCompileOk = true;
+    for (UNiagaraScript* Script : GatherModuleInputScripts(System))
+    {
+        if (!Script)
+        {
+            continue;
+        }
+        const FNiagaraVMExecutableData& Data = Script->GetVMExecutableData();
+        TArray<TSharedPtr<FJsonValue>> Errors;
+        TArray<TSharedPtr<FJsonValue>> Warnings;
+        for (const FNiagaraCompileEvent& Event : Data.LastCompileEvents)
+        {
+            if (Event.Severity != FNiagaraCompileEventSeverity::Error && Event.Severity != FNiagaraCompileEventSeverity::Warning)
+            {
+                continue;
+            }
+            (Event.Severity == FNiagaraCompileEventSeverity::Error ? Errors : Warnings).Add(MakeShared<FJsonValueString>(Event.Message));
+            if (Event.Severity == FNiagaraCompileEventSeverity::Error)
+            {
+                OnError(Event);
+            }
+        }
+        if (Errors.IsEmpty() && !Data.ErrorMsg.IsEmpty())
+        {
+            Errors.Add(MakeShared<FJsonValueString>(Data.ErrorMsg));
+        }
+        const ENiagaraScriptCompileStatus Status = Script->GetLastCompileStatus();
+        bCompileOk &= Errors.IsEmpty() && Status != ENiagaraScriptCompileStatus::NCS_Error;
+        // Only a script something can be said about: an emitter's many stage scripts are mostly clean.
+        if (Errors.Num() > 0 || Warnings.Num() > 0 || Status == ENiagaraScriptCompileStatus::NCS_Error)
+        {
+            TSharedPtr<FJsonObject> Report = McpHandlerUtils::CreateResultObject();
+            Report->SetStringField(TEXT("script"), Script->GetPathName(System->GetOutermost()));
+            Report->SetStringField(TEXT("usage"), NiagaraUsageText(Script->GetUsage()));
+            Report->SetStringField(TEXT("status"), NiagaraCompileStatusText(Status));
+            Report->SetArrayField(TEXT("errors"), Errors);
+            Report->SetArrayField(TEXT("warnings"), Warnings);
+            OutReports.Add(MakeShared<FJsonValueObject>(Report));
+        }
+    }
+    return bCompileOk;
+}
+
 namespace
 {
 
@@ -308,41 +392,6 @@ UEdGraphNode* NewSelectNode(UNiagaraGraph* Graph, const FNiagaraTypeDefinition& 
         *SelectorProp->ContainerPtrToValuePtr<FNiagaraTypeDefinition>(Node) = SelectorType;
         OptionsProp->SetPropertyValue_InContainer(Node, FMath::Max(2, Options));
     });
-}
-
-const TCHAR* UsageText(ENiagaraScriptUsage Usage)
-{
-    switch (Usage)
-    {
-    case ENiagaraScriptUsage::Function: return TEXT("Function");
-    case ENiagaraScriptUsage::Module: return TEXT("Module");
-    case ENiagaraScriptUsage::DynamicInput: return TEXT("DynamicInput");
-    case ENiagaraScriptUsage::ParticleSpawnScript: return TEXT("ParticleSpawn");
-    case ENiagaraScriptUsage::ParticleSpawnScriptInterpolated: return TEXT("ParticleSpawnInterpolated");
-    case ENiagaraScriptUsage::ParticleUpdateScript: return TEXT("ParticleUpdate");
-    case ENiagaraScriptUsage::ParticleEventScript: return TEXT("ParticleEvent");
-    case ENiagaraScriptUsage::ParticleSimulationStageScript: return TEXT("ParticleSimulationStage");
-    case ENiagaraScriptUsage::ParticleGPUComputeScript: return TEXT("ParticleGPUCompute");
-    case ENiagaraScriptUsage::EmitterSpawnScript: return TEXT("EmitterSpawn");
-    case ENiagaraScriptUsage::EmitterUpdateScript: return TEXT("EmitterUpdate");
-    case ENiagaraScriptUsage::SystemSpawnScript: return TEXT("SystemSpawn");
-    case ENiagaraScriptUsage::SystemUpdateScript: return TEXT("SystemUpdate");
-    default: return TEXT("Other");
-    }
-}
-
-const TCHAR* StatusText(ENiagaraScriptCompileStatus Status)
-{
-    switch (Status)
-    {
-    case ENiagaraScriptCompileStatus::NCS_Dirty: return TEXT("Dirty");
-    case ENiagaraScriptCompileStatus::NCS_Error: return TEXT("Error");
-    case ENiagaraScriptCompileStatus::NCS_UpToDate: return TEXT("UpToDate");
-    case ENiagaraScriptCompileStatus::NCS_BeingCreated: return TEXT("BeingCreated");
-    case ENiagaraScriptCompileStatus::NCS_UpToDateWithWarnings: return TEXT("UpToDateWithWarnings");
-    case ENiagaraScriptCompileStatus::NCS_ComputeUpToDateWithWarnings: return TEXT("ComputeUpToDateWithWarnings");
-    default: return TEXT("Unknown");
-    }
 }
 
 bool ParseStage(const FString& Stage, ENiagaraScriptUsage& OutUsage)
@@ -846,7 +895,7 @@ private:
         }
         if (Script->GetUsage() != ENiagaraScriptUsage::Function)
         {
-            OutError = FString::Printf(TEXT("%s is a %s script, not a function."), *Script->GetName(), UsageText(Script->GetUsage()));
+            OutError = FString::Printf(TEXT("%s is a %s script, not a function."), *Script->GetName(), NiagaraUsageText(Script->GetUsage()));
             return nullptr;
         }
         return NewGraphNode(Graph, UNiagaraNodeFunctionCall::StaticClass(), [Script](UEdGraphNode* Node)
@@ -1095,11 +1144,25 @@ static bool CreateScratchModule(FActionContext& Context)
     const FString Name = GetJsonStringField(Context.Payload, TEXT("name"));
     const FString StageName = GetJsonStringField(Context.Payload, TEXT("stage"), TEXT("ParticleUpdate"));
     ENiagaraScriptUsage Stage = ENiagaraScriptUsage::Module;
-    if (Name.IsEmpty() || !ParseStage(StageName, Stage))
+    if (Name.IsEmpty())
     {
-        Context.SendError(Name.IsEmpty() ? TEXT("Missing 'name'. Nothing was changed.")
-            : TEXT("stage must be ParticleSpawn, ParticleUpdate, EmitterSpawn, EmitterUpdate, SystemSpawn or SystemUpdate. Nothing was changed."), TEXT("INVALID_ARGUMENT"));
+        Context.SendError(TEXT("Missing 'name'. Nothing was changed."), TEXT("INVALID_ARGUMENT"));
         return true;
+    }
+    // Any other stage is an emitter's simulation stage, by the name get_niagara_info lists under simulationStages
+    // ("SimulationStage:<Name>" also works). Its stack is the output node with the stage script's usage id.
+    FString SimStageName;
+    if (!ParseStage(StageName, Stage))
+    {
+        SimStageName = StageName;
+        SimStageName.RemoveFromStart(TEXT("SimulationStage:"), ESearchCase::IgnoreCase);
+        SimStageName.TrimStartAndEndInline();
+        if (SimStageName.IsEmpty())
+        {
+            Context.SendError(TEXT("stage must be ParticleSpawn, ParticleUpdate, EmitterSpawn, EmitterUpdate, SystemSpawn, SystemUpdate or the name of one of the emitter's simulation stages. Nothing was changed."), TEXT("INVALID_ARGUMENT"));
+            return true;
+        }
+        Stage = ENiagaraScriptUsage::ParticleSimulationStageScript;
     }
     UNiagaraSystem* System = LoadSystemOrError(Context);
     if (!System || RefuseWhileEditorOpen(Context, System))
@@ -1116,7 +1179,41 @@ static bool CreateScratchModule(FActionContext& Context)
     bool bAddToStack = true;
     Context.Payload->TryGetBoolField(TEXT("addToStack"), bAddToStack);
     UNiagaraGraph* StackGraph = nullptr;
-    if (bAddToStack)
+    FGuid StageUsageId;
+    if (!SimStageName.IsEmpty())
+    {
+        // A simulation stage belongs to one emitter, so it is always looked up, even with addToStack false.
+        FNiagaraEmitterHandle* Handle = ResolveEmitterHandle(Context, System);
+        if (!Handle)
+        {
+            return true;
+        }
+        const FVersionedNiagaraEmitterData* Data = Handle->GetEmitterData();
+        TArray<FString> StageNames;
+        static const TArray<UNiagaraSimulationStageBase*> NoStages;
+        for (UNiagaraSimulationStageBase* SimStage : Data ? Data->GetSimulationStages() : NoStages)
+        {
+            if (!SimStage || !SimStage->Script)
+            {
+                continue;
+            }
+            StageNames.Add(SimStage->SimulationStageName.ToString());
+            if (SimStage->SimulationStageName.ToString().Equals(SimStageName, ESearchCase::IgnoreCase))
+            {
+                StageUsageId = SimStage->Script->GetUsageId();
+                SimStageName = SimStage->SimulationStageName.ToString();
+            }
+        }
+        if (!StageUsageId.IsValid())
+        {
+            Context.SendError(FString::Printf(TEXT("'%s' is neither a regular stage (ParticleSpawn, ParticleUpdate, EmitterSpawn, EmitterUpdate, SystemSpawn, SystemUpdate) nor a simulation stage of emitter %s; its simulation stages: [%s]. Add one with add_niagara_module moduleKind=simulation_stage. Nothing was changed."),
+                *StageName, *Context.EmitterName, *FString::Join(StageNames, TEXT(", "))), TEXT("STAGE_NOT_FOUND"));
+            return true;
+        }
+        UNiagaraScriptSource* Source = GetEmitterScriptSource(Handle);
+        StackGraph = bAddToStack && Source ? Source->NodeGraph : nullptr;
+    }
+    else if (bAddToStack)
     {
         const bool bSystemStage = Stage == ENiagaraScriptUsage::SystemSpawnScript || Stage == ENiagaraScriptUsage::SystemUpdateScript;
         if (bSystemStage)
@@ -1134,7 +1231,7 @@ static bool CreateScratchModule(FActionContext& Context)
             StackGraph = Source ? Source->NodeGraph : nullptr;
         }
     }
-    UNiagaraNodeOutput* StackOutput = StackGraph ? StackGraph->FindEquivalentOutputNode(Stage) : nullptr;
+    UNiagaraNodeOutput* StackOutput = StackGraph ? StackGraph->FindEquivalentOutputNode(Stage, StageUsageId) : nullptr;
     if (bAddToStack && !StackOutput)
     {
         Context.SendError(FString::Printf(TEXT("No %s stack to add the module to. Nothing was changed."), *StageName), TEXT("STAGE_NOT_FOUND"));
@@ -1211,7 +1308,11 @@ static bool CreateScratchModule(FActionContext& Context)
     }
     System->MarkPackageDirty();
     ReportScratchGraph(Context, Script, Graph);
-    Context.Result->SetStringField(TEXT("stage"), StageName);
+    Context.Result->SetStringField(TEXT("stage"), SimStageName.IsEmpty() ? StageName : TEXT("ParticleSimulationStage"));
+    if (!SimStageName.IsEmpty())
+    {
+        Context.Result->SetStringField(TEXT("simulationStage"), SimStageName);
+    }
     Context.SendSuccess(true, FString::Printf(TEXT("Scratch module %s made on the system. Compile with apply_niagara_scratch_module; nothing is saved until then."), *Script->GetName()));
     return true;
 }
@@ -1300,52 +1401,15 @@ static bool ApplyScratchModule(FActionContext& Context)
             }
         }
     }
-    System->RequestCompile(false);
-    System->WaitForCompilationComplete(false, false);
-
     TMap<UNiagaraScript*, TArray<TSharedPtr<FJsonValue>>> ScratchErrors;
     TArray<TSharedPtr<FJsonValue>> ScriptReports;
-    bool bCompileOk = true;
-    for (UNiagaraScript* Script : GatherModuleInputScripts(System))
+    const bool bCompileOk = CompileSystemAndCollect(System, ScriptReports, [&](const FNiagaraCompileEvent& Event)
     {
-        if (!Script)
+        if (UNiagaraScript* Owner = AttributeEvent(Event, NodeOwners))
         {
-            continue;
+            ScratchErrors.FindOrAdd(Owner).Add(MakeShared<FJsonValueString>(Event.Message));
         }
-        const FNiagaraVMExecutableData& Data = Script->GetVMExecutableData();
-        TArray<TSharedPtr<FJsonValue>> Errors;
-        TArray<TSharedPtr<FJsonValue>> Warnings;
-        for (const FNiagaraCompileEvent& Event : Data.LastCompileEvents)
-        {
-            if (Event.Severity != FNiagaraCompileEventSeverity::Error && Event.Severity != FNiagaraCompileEventSeverity::Warning)
-            {
-                continue;
-            }
-            const TSharedPtr<FJsonValue> Message = MakeShared<FJsonValueString>(Event.Message);
-            (Event.Severity == FNiagaraCompileEventSeverity::Error ? Errors : Warnings).Add(Message);
-            if (UNiagaraScript* Owner = AttributeEvent(Event, NodeOwners); Owner && Event.Severity == FNiagaraCompileEventSeverity::Error)
-            {
-                ScratchErrors.FindOrAdd(Owner).Add(Message);
-            }
-        }
-        if (Errors.IsEmpty() && !Data.ErrorMsg.IsEmpty())
-        {
-            Errors.Add(MakeShared<FJsonValueString>(Data.ErrorMsg));
-        }
-        const ENiagaraScriptCompileStatus Status = Script->GetLastCompileStatus();
-        bCompileOk &= Errors.IsEmpty() && Status != ENiagaraScriptCompileStatus::NCS_Error;
-        // Only a script something can be said about: an emitter's many stage scripts are mostly clean.
-        if (Errors.Num() > 0 || Warnings.Num() > 0 || Status == ENiagaraScriptCompileStatus::NCS_Error)
-        {
-            TSharedPtr<FJsonObject> Report = McpHandlerUtils::CreateResultObject();
-            Report->SetStringField(TEXT("script"), Script->GetPathName(System->GetOutermost()));
-            Report->SetStringField(TEXT("usage"), UsageText(Script->GetUsage()));
-            Report->SetStringField(TEXT("status"), StatusText(Status));
-            Report->SetArrayField(TEXT("errors"), Errors);
-            Report->SetArrayField(TEXT("warnings"), Warnings);
-            ScriptReports.Add(MakeShared<FJsonValueObject>(Report));
-        }
-    }
+    });
 
     TArray<TSharedPtr<FJsonValue>> ScratchReports;
     for (UNiagaraScript* Script : Scratch)
@@ -1393,7 +1457,7 @@ static bool GetScratchModule(FActionContext& Context)
         TSharedPtr<FJsonObject> Entry = McpHandlerUtils::CreateResultObject();
         Entry->SetStringField(TEXT("scriptName"), Script->GetName());
         Entry->SetStringField(TEXT("owner"), Owner);
-        Entry->SetStringField(TEXT("usage"), UsageText(Script->GetUsage()));
+        Entry->SetStringField(TEXT("usage"), NiagaraUsageText(Script->GetUsage()));
         const bool bWanted = Script->GetName().Equals(ScriptName, ESearchCase::IgnoreCase);
         if (UNiagaraGraph* Graph = bWanted ? ScriptGraph(Script) : nullptr)
         {

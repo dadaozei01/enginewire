@@ -94,6 +94,67 @@ static TSharedPtr<FJsonObject> CollectModuleStaticSwitches(const FNiagaraEmitter
     return Switches;
 }
 
+// A renderer property's value as the details panel writes it (an enum by name, a vector as (X=..)), by reflection so
+// the same reader covers every renderer class; empty for a property the class lacks.
+static FString ExportRendererProperty(const UObject* Renderer, const TCHAR* PropertyName)
+{
+    const FProperty* Property = Renderer->GetClass()->FindPropertyByName(PropertyName);
+    if (!Property)
+    {
+        return FString();
+    }
+    FString Text;
+    Property->ExportTextItem_Direct(Text, Property->ContainerPtrToValuePtr<void>(Renderer), nullptr, nullptr, PPF_None);
+    return Text;
+}
+
+// How sprites and meshes are turned: the facing and alignment modes, the locked axis, and the particle attributes the
+// renderer reads its orientation from (a soldier mesh turned by Particles.MeshOrientation, a sprite by
+// Particles.SpriteFacing). Written with inspect.set_property on objectPath.
+static void AddRendererFacing(const UNiagaraRendererProperties* Renderer, const TSharedPtr<FJsonObject>& RendererObj)
+{
+    for (const TCHAR* Name : {TEXT("FacingMode"), TEXT("Alignment"), TEXT("SortMode"), TEXT("bLockedAxisEnable"), TEXT("LockedAxis"), TEXT("LockedAxisSpace")})
+    {
+        const FString Value = ExportRendererProperty(Renderer, Name);
+        if (!Value.IsEmpty())
+        {
+            FString Key(Name);
+            Key.RemoveFromStart(TEXT("b"), ESearchCase::CaseSensitive);
+            Key[0] = FChar::ToLower(Key[0]);
+            RendererObj->SetStringField(Key, Value);
+        }
+    }
+    TSharedPtr<FJsonObject> Bindings = MakeShared<FJsonObject>();
+    const auto AddBinding = [&](const TCHAR* Key, const FNiagaraVariableAttributeBinding& Binding)
+    {
+        const FName Bound = Binding.GetParamMapBindableVariable().GetName();
+        Bindings->SetStringField(Key, Bound.IsNone() ? FString() : Bound.ToString());
+    };
+    if (const UNiagaraSpriteRendererProperties* Sprite = Cast<UNiagaraSpriteRendererProperties>(Renderer))
+    {
+        AddBinding(TEXT("spriteFacing"), Sprite->SpriteFacingBinding);
+        AddBinding(TEXT("spriteAlignment"), Sprite->SpriteAlignmentBinding);
+        AddBinding(TEXT("spriteRotation"), Sprite->SpriteRotationBinding);
+        AddBinding(TEXT("velocity"), Sprite->VelocityBinding);
+    }
+    if (const UNiagaraMeshRendererProperties* Mesh = Cast<UNiagaraMeshRendererProperties>(Renderer))
+    {
+        AddBinding(TEXT("meshOrientation"), Mesh->MeshOrientationBinding);
+        AddBinding(TEXT("velocity"), Mesh->VelocityBinding);
+        AddBinding(TEXT("scale"), Mesh->ScaleBinding);
+        TArray<TSharedPtr<FJsonValue>> Meshes;
+        for (const FNiagaraMeshRendererMeshProperties& Entry : Mesh->Meshes)
+        {
+            Meshes.Add(MakeShared<FJsonValueString>(Entry.Mesh ? Entry.Mesh->GetPathName() : FString()));
+        }
+        RendererObj->SetArrayField(TEXT("meshes"), Meshes);
+    }
+    if (Bindings->Values.Num() > 0)
+    {
+        RendererObj->SetObjectField(TEXT("bindings"), Bindings);
+    }
+}
+
 // Each renderer by the object path inspect.set_property writes (Material, bCastShadows ...): finding it took a dump
 // of the emitter's own properties.
 static TArray<TSharedPtr<FJsonValue>> CollectRenderers(MCP_NIAGARA_EMITTER_DATA_TYPE& EmitterData)
@@ -116,6 +177,7 @@ static TArray<TSharedPtr<FJsonValue>> CollectRenderers(MCP_NIAGARA_EMITTER_DATA_
         {
             RendererObj->SetStringField(TEXT("material"), Material->GetPathName());
         }
+        AddRendererFacing(Renderer, RendererObj);
         Renderers.Add(MakeShared<FJsonValueObject>(RendererObj));
     }
     return Renderers;

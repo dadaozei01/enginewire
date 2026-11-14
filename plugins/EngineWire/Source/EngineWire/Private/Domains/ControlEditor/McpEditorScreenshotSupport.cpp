@@ -76,6 +76,17 @@ void SendScreenshotReceiptForMcp(UEngineWireSubsystem *Subsystem,
   // inline capture now fits McpInlineScreenshotBox (ResolveScreenshotResolutionForMcp).
   const bool bReturnBase64 = McpScreenshotReturnsImage(Payload);
 
+  // A caller that hands its own request to the screenshot (step_niagara_simulation) puts its result here, and it
+  // comes back beside the image.
+  const TSharedPtr<FJsonObject> *Carry = nullptr;
+  if (Payload->TryGetObjectField(TEXT("_mcpCarry"), Carry) && Carry && Carry->IsValid()) {
+    for (const auto &Entry : (*Carry)->Values) {
+      if (!Resp->HasField(Entry.Key)) {
+        Resp->SetField(Entry.Key, Entry.Value);
+      }
+    }
+  }
+
   Resp->SetBoolField(TEXT("success"), true);
   Resp->SetBoolField(TEXT("saved"), bSaved);
   Resp->SetNumberField(TEXT("sizeBytes"), PngBytes);
