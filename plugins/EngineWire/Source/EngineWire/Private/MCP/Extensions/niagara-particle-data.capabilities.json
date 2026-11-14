@@ -11,15 +11,17 @@
     "CPU particle data",
     "particle attributes",
     "Niagara 粒子位置",
-    "粒子数值读取"
+    "粒子数值读取",
+    "GPU particle data",
+    "GPU 粒子读回"
    ],
-   "summary": "Read the current particle buffer of a live stateful CPU Niagara emitter on an actor in PIE (preferred) or the editor world. Reports the real total and a bounded snapshot. Position is converted from Niagara LWC/local simulation coordinates to world space in Unreal units; all other vectors retain simulation space. No assets are saved. Only explicitly passing advanceTicks > 0 advances this component with AdvanceSimulation before the read; this can run completion callbacks. Missing attributes list available compiled attributes; GPU/stateless emitters return NOT_SUPPORTED. An explicit positive advance can initialize a pending first spawn before validating the new particle buffer; existing emitter/type/attribute data is validated first when available.",
+   "summary": "Read the current particle buffer of a live Niagara emitter on an actor in PIE (preferred) or the editor world. CPU emitters are read directly; GPU emitters are read back through a transient sim cache capture (synchronous: it flushes the GPU simulation, readbackMs reports the wait; a component paused by step_niagara_simulation is read at its paused frame; Bool attributes are not read back from the GPU). Reports the real total and a bounded snapshot. Position is converted to world space in Unreal units; all other vectors retain simulation space. No assets are saved. Only explicitly passing advanceTicks > 0 advances this component with AdvanceSimulation before the read; this can run completion callbacks. Missing attributes list available compiled attributes; stateless emitters return NOT_SUPPORTED. To read one exact frame, pause it with step_niagara_simulation and omit advanceTicks.",
    "whenToUse": [
     "Numerically inspect CPU particle Position, Velocity or other compiled attributes on a live Niagara component.",
     "Compare a Scratch module result after explicitly advancing a running simulation."
    ],
    "whenNotToUse": [
-    "GPU or stateless emitters: no GPU readback is implemented.",
+    "Stateless emitters: they have no particle buffer.",
     "Inactive or completed systems: this call does not activate or reset them. Without advanceTicks > 0, pending-first-tick/missing-buffer systems return NO_SIMULATION_DATA with guidance; completed instances return SYSTEM_COMPLETE.",
     "Actors with multiple Niagara components: the target would be ambiguous.",
     "A strictly observational request must omit advanceTicks and tickDeltaSeconds."
@@ -97,7 +99,8 @@
      "simTarget": {
       "type": "string",
       "enum": [
-       "CPUSim"
+       "CPUSim",
+       "GPUComputeSim"
       ]
      },
      "world": {
@@ -173,6 +176,17 @@
        "additionalProperties": false
       },
       "description": "Same buffer indices across attributes, not stable particle IDs across calls. Non-finite or invalid reader values fail the request; no zero-filled fallback."
+     },
+     "readback": {
+      "type": "string",
+      "enum": [
+       "simCache"
+      ],
+      "description": "GPU only: how the values were read back."
+     },
+     "readbackMs": {
+      "type": "number",
+      "description": "GPU only: time the synchronous capture took."
      }
     },
     "required": [

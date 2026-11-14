@@ -199,6 +199,17 @@ bool ApplyJsonValueToProperty(void* TargetContainer, FProperty* Property, const 
         IntProp->SetPropertyValue_InContainer(TargetContainer, static_cast<int32>(IntValue));
         return true;
     }
+    // Unsigned 32-bit (a Niagara NeighborGrid3D's MaxNeighborsPerCell) was refused as an unsupported type.
+    if (FUInt32Property* UInt32Prop = CastField<FUInt32Property>(Property))
+    {
+        if (!JsonNumberOrStringToInt64(ValueField, IntValue) || IntValue < 0 || IntValue > MAX_uint32)
+        {
+            OutError = TEXT("UInt32 property requires an integer 0..4294967295");
+            return false;
+        }
+        UInt32Prop->SetPropertyValue_InContainer(TargetContainer, static_cast<uint32>(IntValue));
+        return true;
+    }
     if (FInt64Property* Int64Prop = CastField<FInt64Property>(Property))
     {
         if (!JsonNumberOrStringToInt64(ValueField, IntValue)) { OutError = TEXT("Unsupported JSON type for int64 property"); return false; }

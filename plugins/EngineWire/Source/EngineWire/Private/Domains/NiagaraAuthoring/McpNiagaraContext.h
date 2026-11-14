@@ -107,6 +107,23 @@
 #define MCP_HAS_NIAGARA_STATIC_MESH_DI 0
 #endif
 
+// Private subsystem handlers that Niagara commands chain into (a friend of UEngineWireSubsystem): the level-editor
+// screenshot, and the Niagara authoring dispatcher itself, which a composite command runs step by step with its replies
+// captured (FMcpResponseCaptureRegistry).
+struct FMcpNiagaraHandlerAccess
+{
+    static bool Screenshot(UEngineWireSubsystem* Subsystem, const FString& RequestId, const TSharedPtr<FJsonObject>& Payload,
+        TSharedPtr<FMcpBridgeWebSocket> Socket)
+    {
+        return Subsystem->HandleControlEditorScreenshot(RequestId, Payload, Socket);
+    }
+    static bool Niagara(UEngineWireSubsystem* Subsystem, const FString& RequestId, const TSharedPtr<FJsonObject>& Payload,
+        TSharedPtr<FMcpBridgeWebSocket> Socket)
+    {
+        return Subsystem->HandleManageNiagaraAuthoringAction(RequestId, TEXT("manage_niagara_authoring"), Payload, Socket);
+    }
+};
+
 namespace McpNiagaraAuthoringHandlers
 {
 // UE 5.7 deprecates two of the module scripts this domain inserts:
@@ -299,4 +316,6 @@ bool HandleParticleDataAction(FActionContext& Context, const FString& SubAction)
 // set_niagara_sim_target / set_niagara_simulation_stage (a system asset).
 bool HandleSimulationControlAction(FActionContext& Context, const FString& SubAction);
 bool HandleSimulationSettingsAction(FActionContext& Context, const FString& SubAction);
+// In McpNiagaraBattleSetup.cpp: setup_niagara_neighbor_grid and create_niagara_data_channel.
+bool HandleBattleSetupAction(FActionContext& Context, const FString& SubAction);
 }

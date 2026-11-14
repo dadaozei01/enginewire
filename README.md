@@ -25,7 +25,7 @@
 
 | 平台 | 最新包 | 状态 |
 |---|---|---|
-| Mac (Apple Silicon) | [v0.6.0-ue58.3](https://github.com/dadaozei01/enginewire/releases/tag/v0.6.0-ue58.3) 预发布 | Xcode 27.0 编译的 Universal 包。工程加载、MCP、蓝图、材质、Niagara、Python、Chaos 破碎、PIE、截图实测通过（第 18 项）；新增 Niagara 系统级 Scratch 模块（Custom HLSL、数据接口输入与实例赋值）、CPU 粒子数据读取、删除未引用用户参数、发射器 localSpace/determinism，已实测 GPU Scratch、PIE、LWC 与本地空间（第 19–25 项）。功能分支 `feat/niagara-battle-ue58` 另有 CPU/GPU 切换、逐帧锁定与截图、阶段与朝向读回、Scratch 进仿真阶段（第 26 项，未发布）。 |
+| Mac (Apple Silicon) | [v0.6.0-ue58.3](https://github.com/dadaozei01/enginewire/releases/tag/v0.6.0-ue58.3) 预发布 | Xcode 27.0 编译的 Universal 包。工程加载、MCP、蓝图、材质、Niagara、Python、Chaos 破碎、PIE、截图实测通过（第 18 项）；新增 Niagara 系统级 Scratch 模块（Custom HLSL、数据接口输入与实例赋值）、CPU 粒子数据读取、删除未引用用户参数、发射器 localSpace/determinism，已实测 GPU Scratch、PIE、LWC 与本地空间（第 19–25 项）。功能分支 `feat/niagara-battle-ue58` 另有 CPU/GPU 切换、逐帧锁定与截图、阶段与朝向读回、Scratch 进仿真阶段、GPU 粒子读回、NeighborGrid3D 一键搭建、Data Channel 资产创建（第 26–27 项，未发布）。 |
 | Windows x64 | [v0.6.0-ue58.1](https://github.com/dadaozei01/enginewire/releases/tag/v0.6.0-ue58.1) 预发布 | 插件加载、MCP 连接、引擎级安装、中文蓝图文本往返与编译、Chaos 破碎和 PIE 实测通过（第 17 项）。第 19–25 项的 Niagara 新功能**尚未在 Windows 编译**，下一版发布前补上。 |
 
 今后同一版本号同时提供 Win64 与 Mac 两个 ZIP。

@@ -1,0 +1,376 @@
+[
+ {
+  "id": "manage_effect.setup_niagara_neighbor_grid",
+  "aliases": [
+   "manage_effect.add_niagara_neighbor_grid"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara runtime",
+   "topics": [
+    "neighbor grid",
+    "neighbour search",
+    "crowd separation",
+    "particle collision",
+    "NeighborGrid3D",
+    "邻域网格",
+    "粒子互相碰撞",
+    "人群分离"
+   ],
+   "summary": "Build a GPU neighbour search on one emitter in one call: a NeighborGrid3D user parameter (User.<gridName>, numCells over worldBBoxSize centred on the effect), a <gridName>Populate simulation stage whose Scratch module adds each particle to its cell, and a <gridName>Query stage whose Scratch module walks the 27 surrounding cells through a particle reader of the emitter itself and writes Particles.NeighborCount and Particles.Separation (a push away from neighbours closer than radius, 1 at contact, 0 at radius). Runs set_niagara_data_interface, add_simulation_stage, create/apply_niagara_scratch_module, bind_parameter_to_source and set_parameter_value as steps and lists each; a failed step stops it (SETUP_STEP_FAILED) with the earlier steps left unsaved in memory. GPU emitters only; names already taken are refused before anything changes. The separation is not applied to motion: add it to Velocity (or Position) in a later module, and raise the query stage's iterations with set_niagara_simulation_stage.",
+   "whenToUse": [
+    "Particles (a crowd, an army) must keep apart or react to their nearest neighbours on the GPU."
+   ],
+   "whenNotToUse": [
+    "CPU emitters: switch with set_niagara_sim_target first.",
+    "Reading another emitter's particles: a ParticleRead data interface with set_niagara_data_interface EmitterBinding."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action on manage_effect."
+     },
+     "systemPath": {
+      "type": "string",
+      "description": "Canonical /Game Niagara System asset path."
+     },
+     "emitterName": {
+      "type": "string",
+      "description": "The GPU emitter."
+     },
+     "gridName": {
+      "type": "string",
+      "description": "Name of the grid user parameter and prefix of the stages and modules (default NeighborGrid)."
+     },
+     "numCells": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "Cells per axis, 1..512 (default [32,32,4])."
+     },
+     "worldBBoxSize": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "Size of the box the grid covers, in cm, centred on the effect (default [6400,6400,800]). Cell size is this over numCells; keep it at least the radius."
+     },
+     "maxNeighborsPerCell": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "description": "Particles a cell holds (default 8); more are dropped from the search."
+     },
+     "radius": {
+      "type": "number",
+      "description": "Separation radius in cm (default 100)."
+     },
+     "save": {
+      "type": "boolean",
+      "description": "Save after the final clean compile (default true)."
+     }
+    },
+    "required": [
+     "action",
+     "systemPath",
+     "emitterName"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "steps": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      },
+      "description": "Each step: {step, subAction, success, message, errorCode, compiledScripts}."
+     },
+     "gridParameter": {
+      "type": "string"
+     },
+     "populateStage": {
+      "type": "string"
+     },
+     "queryStage": {
+      "type": "string"
+     },
+     "populateModule": {
+      "type": "string"
+     },
+     "queryModule": {
+      "type": "string"
+     },
+     "writes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "compileOk": {
+      "type": "boolean"
+     },
+     "saved": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "Separation for a GPU army.",
+    "input": {
+     "action": "setup_niagara_neighbor_grid",
+     "systemPath": "/Game/MCPTest/NS_Battle",
+     "emitterName": "ArmyA",
+     "numCells": [
+      64,
+      64,
+      2
+     ],
+     "worldBBoxSize": [
+      12800,
+      12800,
+      400
+     ],
+     "radius": 120
+    },
+    "output": {
+     "success": true,
+     "populateStage": "NeighborGridPopulate",
+     "queryStage": "NeighborGridQuery",
+     "compileOk": true,
+     "saved": true
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "non-idempotent",
+   "longRunning": true,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "medium"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "setup_niagara_neighbor_grid"
+  }
+ },
+ {
+  "id": "manage_effect.create_niagara_data_channel",
+  "aliases": [
+   "manage_effect.new_niagara_data_channel"
+  ],
+  "discovery": {
+   "domain": "effect",
+   "family": "niagara runtime",
+   "topics": [
+    "niagara data channel",
+    "NDC",
+    "data channel asset",
+    "blueprint to niagara",
+    "hit events",
+    "数据通道",
+    "命中点"
+   ],
+   "summary": "Create a Niagara Data Channel asset (channelType Global, the default, or Islands) with its variables [{name, type}] (Float, Int, Bool, Vector, Position, Color, Quat ...). Game code writes it (Blueprint: Write To Niagara Data Channel, then the writer's Write Position/Float... by variable name, with Visible To CPU/GPU on), and emitters read it: give a Scratch module an input of type NiagaraDataInterfaceDataChannelRead, point it at the asset with set_niagara_data_interface properties {Channel: assetPath}, and call Reader.Num(Count) / Reader.Read in Custom HLSL. An existing asset is refused.",
+   "whenToUse": [
+    "Gameplay events (bullet hits, explosions) must reach Niagara as data without one component per event."
+   ],
+   "whenNotToUse": [
+    "One value per effect: a user parameter is simpler."
+   ]
+  },
+  "schemas": {
+   "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "The action on manage_effect."
+     },
+     "assetPath": {
+      "type": "string",
+      "description": "The new asset, /Game/<folder>/<Name>."
+     },
+     "channelType": {
+      "type": "string",
+      "enum": [
+       "Global",
+       "Islands"
+      ],
+      "description": "Global (default): one data set for the world. Islands: split by location."
+     },
+     "variables": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "type": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "type"
+       ],
+       "additionalProperties": false
+      },
+      "description": "The channel's variables."
+     },
+     "save": {
+      "type": "boolean",
+      "description": "Save the new asset (default true)."
+     }
+    },
+    "required": [
+     "action",
+     "assetPath",
+     "variables"
+    ],
+    "additionalProperties": false
+   },
+   "output": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "success": {
+      "type": "boolean",
+      "description": "Whether the action succeeded."
+     },
+     "message": {
+      "type": "string",
+      "description": "Human-readable result message."
+     },
+     "details": {
+      "type": "object",
+      "x-unreal-reflection-boundary": true,
+      "description": "Additional handler result fields not named by the contract."
+     },
+     "assetPath": {
+      "type": "string"
+     },
+     "channelType": {
+      "type": "string"
+     },
+     "variables": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "x-unreal-reflection-boundary": true
+      }
+     },
+     "saved": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "success"
+    ],
+    "additionalProperties": false
+   }
+  },
+  "examples": [
+   {
+    "title": "A channel for bullet hits.",
+    "input": {
+     "action": "create_niagara_data_channel",
+     "assetPath": "/Game/MCPTest/NDC_Hits",
+     "variables": [
+      {
+       "name": "HitPosition",
+       "type": "Position"
+      },
+      {
+       "name": "Team",
+       "type": "Int"
+      }
+     ]
+    },
+    "output": {
+     "success": true,
+     "assetPath": "/Game/MCPTest/NDC_Hits.NDC_Hits",
+     "saved": true
+    }
+   }
+  ],
+  "availability": {
+   "requiredPlugins": [
+    "Niagara"
+   ],
+   "editorStates": [
+    "edit"
+   ]
+  },
+  "behavior": {
+   "effect": "write",
+   "idempotency": "non-idempotent",
+   "longRunning": false,
+   "safeToRetry": false
+  },
+  "policy": {
+   "requiredScope": "write",
+   "consent": "none",
+   "dataAccess": "project-write"
+  },
+  "cost": {
+   "latency": "interactive",
+   "resources": "low"
+  },
+  "routing": {
+   "parentTool": "manage_effect",
+   "dispatchAction": "create_niagara_data_channel"
+  }
+ }
+]

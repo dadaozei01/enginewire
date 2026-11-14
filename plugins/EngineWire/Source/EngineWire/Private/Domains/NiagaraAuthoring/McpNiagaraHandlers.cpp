@@ -58,6 +58,7 @@ bool UEngineWireSubsystem::HandleManageNiagaraAuthoringAction(
     if (McpNiagaraAuthoringHandlers::HandleEventAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleSimulationAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleSimulationSettingsAction(Context, SubAction)) return true;
+    if (McpNiagaraAuthoringHandlers::HandleBattleSetupAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleInfoValidationAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleDataInterfaceConfigAction(Context, SubAction)) return true;
     if (McpNiagaraAuthoringHandlers::HandleScratchAction(Context, SubAction)) return true;

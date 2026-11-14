@@ -17,16 +17,6 @@
 #include "NiagaraSystemInstanceController.h"
 #include "Safety/McpSafeOperations.h"
 
-// The level-editor screenshot handler is a private member of the subsystem; this friend reaches it.
-struct FMcpNiagaraHandlerAccess
-{
-    static bool Screenshot(UEngineWireSubsystem* Subsystem, const FString& RequestId, const TSharedPtr<FJsonObject>& Payload,
-        TSharedPtr<FMcpBridgeWebSocket> Socket)
-    {
-        return Subsystem->HandleControlEditorScreenshot(RequestId, Payload, Socket);
-    }
-};
-
 namespace McpNiagaraAuthoringHandlers
 {
 UNiagaraComponent* ResolveWorldNiagaraComponent(FActionContext& Context, const FString& ActorName, const FString& ComponentName,
