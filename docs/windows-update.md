@@ -25,7 +25,7 @@
 
 ---
 
-按顺序执行。每一步失败都先停下报告，不要自己换路线。只做本机操作：不推送 `main`，不发布 Release。两个脚本于 2026-11-08 在 Mac 上写成，**尚未在 Windows 上运行过**；脚本本身出错时按第 3 节同样的规则修复并提交到分支。
+按顺序执行。每一步失败都先停下报告，不要自己换路线。只做本机操作：不推送 `main`，不发布 Release。两个脚本于 2026-11-08 在 Mac 上写成，2026-11-09 已在 Windows 跑通编译、安装与打包（`-Zip` 压缩时若报 DLL 被占用，多为杀毒扫描，稍后重试一次即可）；脚本本身出错时按第 3 节同样的规则修复并提交到分支。
 
 ## 0. 只读确认
 
@@ -59,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1
 
 ## 3. MSVC 报错怎么处理
 
-UPSTREAM 第 19–25 项已在 v0.7.0-ue58 用 MSVC 编译通过（当时的修复已合入 `main`）；第 26–28 项（Niagara 模拟控制与对战搭建、蓝图规则化排版，新文件 `McpNiagaraBattleSetup.cpp`、`Foundation/GraphLayout/McpRuled*.cpp`）只在 Mac clang 上编译过。下面这些属于 clang 与 MSVC 的差异，可以做最小修改：
+UPSTREAM 第 19–25 项已在 v0.7.0-ue58 用 MSVC 编译通过（当时的修复已合入 `main`）；第 27–29 项（Niagara 模拟控制与对战搭建、蓝图规则化排版，新文件 `McpNiagaraBattleSetup.cpp`、`Foundation/GraphLayout/McpRuled*.cpp`）只在 Mac clang 上编译过。下面这些属于 clang 与 MSVC 的差异，可以做最小修改：
 
 | 报错 | 原因 | 改法 |
 |---|---|---|

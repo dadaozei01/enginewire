@@ -19,7 +19,7 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 ### Added (Niagara battle setup, UE 5.8 fork)
 - `get_niagara_particle_data` reads GPU emitters through a transient sim cache capture (Bool attributes excepted).
 - `setup_niagara_neighbor_grid` builds a NeighborGrid3D neighbour search (populate and query stages with Scratch modules) on a GPU emitter in one call.
-- `create_niagara_data_channel` creates a Niagara Data Channel asset with its variables. A CPU emitter reads it after `set_niagara_data_interface` binds the read DI (UPSTREAM item 27); a GPU emitter reading it is untested.
+- `create_niagara_data_channel` creates a Niagara Data Channel asset with its variables. A CPU emitter reads it after `set_niagara_data_interface` binds the read DI (UPSTREAM item 28); a GPU emitter reading it is untested.
 
 ### Fixed (Niagara, UE 5.8 fork)
 - `set_niagara_data_interface` no longer blanks compile-time DI state when it syncs runtime instances: it calls `PostCompile` on each resolved instance after copying, so an NDC read DI binds and returns data (before, `Num` stayed 0).
@@ -31,7 +31,7 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 - `set_niagara_simulation_stage` sets a simulation stage's iteration count and enabled state.
 - `get_niagara_info` reports each module's stage, simulation stage and order, each emitter's simulation stages, and renderer facing/alignment/locked-axis settings and orientation bindings.
 - `create_niagara_scratch_module` accepts a simulation stage name for `stage`.
-- Verified on BP_Test 5.8.4 Mac (UPSTREAM item 26).
+- Verified on BP_Test 5.8.4 Mac (UPSTREAM item 27).
 
 ## [0.7.0-ue58] - 2026-11-09
 

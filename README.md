@@ -25,8 +25,8 @@
 
 | 平台 | 最新包 | 状态 |
 |---|---|---|
-| Mac (Apple Silicon) | v0.8.0-ue58（发布中，此前为 [v0.6.0-ue58.3](https://github.com/dadaozei01/enginewire/releases/tag/v0.6.0-ue58.3)） | Xcode 27.0 编译的 Universal 包。工程加载、MCP、蓝图、材质、Niagara、Python、Chaos 破碎、PIE、截图实测通过（第 18 项）；Niagara 系统级 Scratch 模块（Custom HLSL、数据接口输入与实例赋值）、粒子数据读取、删除未引用用户参数、发射器 localSpace/determinism（第 19–25 项）；CPU/GPU 切换、逐帧锁定与截图、仿真阶段、GPU 粒子读回、发射器互读、NeighborGrid3D 一键搭建、Data Channel 创建与 CPU 发射器读取（第 26–27 项）；蓝图规则化自动排版（第 28 项）。 |
-| Windows x64 | [v0.7.0-ue58](https://github.com/dadaozei01/enginewire/releases/tag/v0.7.0-ue58) 预发布 | 插件加载、MCP、引擎级安装、中文蓝图文本往返、Chaos 破碎、PIE 实测通过（第 17 项）；第 19–25 项 Niagara 功能已在 Windows 编译并实测。第 26–28 项（Niagara 模拟控制与对战搭建、蓝图自动排版）**尚未在 Windows 编译**，v0.8.0-ue58 的 Win64 包待补（步骤见 [windows-update.md](docs/windows-update.md)）。 |
+| Mac (Apple Silicon) | v0.8.0-ue58（发布中，此前为 [v0.6.0-ue58.3](https://github.com/dadaozei01/enginewire/releases/tag/v0.6.0-ue58.3)） | Xcode 27.0 编译的 Universal 包。工程加载、MCP、蓝图、材质、Niagara、Python、Chaos 破碎、PIE、截图实测通过（第 18 项）；Niagara 系统级 Scratch 模块（Custom HLSL、数据接口输入与实例赋值）、粒子数据读取、删除未引用用户参数、发射器 localSpace/determinism（第 19–25 项）；CPU/GPU 切换、逐帧锁定与截图、仿真阶段、GPU 粒子读回、发射器互读、NeighborGrid3D 一键搭建、Data Channel 创建与 CPU 发射器读取（第 27–28 项）；蓝图规则化自动排版（第 29 项）。 |
+| Windows x64 | [v0.7.0-ue58](https://github.com/dadaozei01/enginewire/releases/tag/v0.7.0-ue58) 预发布 | MSVC 14.44.35229 编译。插件加载、MCP 连接、引擎级安装、中文蓝图文本往返与编译、Chaos 破碎和 PIE 实测通过（第 17 项）；第 19–25 项的 Niagara 新功能已在 Windows 编译，Scratch、数据接口、粒子读取、删除用户参数、localSpace、GPU 与 PIE 共 9 项实测通过（第 26 项）。第 27–29 项（Niagara 模拟控制与对战搭建、蓝图自动排版）**尚未在 Windows 编译**，v0.8.0-ue58 的 Win64 包待补（步骤见 [windows-update.md](docs/windows-update.md)）。 |
 
 今后同一版本号同时提供 Win64 与 Mac 两个 ZIP。
 

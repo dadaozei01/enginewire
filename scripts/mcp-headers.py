@@ -32,11 +32,11 @@ def process_info(pid):
     """Executable name and full command line of a process."""
     if sys.platform == 'win32':
         ps = ('[Console]::OutputEncoding=[Text.Encoding]::UTF8;'
-              '$p=Get-CimInstance Win32_Process -Filter "ProcessId=%d";$p.Name;$p.CommandLine' % pid)
-        lines = run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', ps]).splitlines() + ['', '']
-        return lines[0], lines[1]
+              '$p=Get-CimInstance Win32_Process -Filter "ProcessId=%d";$p.Name;$p.CommandLine;$p.ExecutablePath' % pid)
+        lines = run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', ps]).splitlines() + ['', '', '']
+        return lines[0], lines[1], lines[2]
     return (os.path.basename(run(['ps', '-p', str(pid), '-o', 'comm=']).strip()),
-            run(['ps', '-p', str(pid), '-o', 'args=']).strip())
+            run(['ps', '-p', str(pid), '-o', 'args=']).strip(), '')
 
 
 def project_from_command_line(cmdline):
@@ -68,15 +68,31 @@ def project_from_open_files(pid):
     return projects.pop()
 
 
+def engine_user_dir(exe_path):
+    """A Windows editor started with no project (it opens the last one by itself) keeps its Saved folder,
+    and so the token, under %LOCALAPPDATA%\\UnrealEngine\\<major.minor>, not under the project."""
+    engine_dir = os.path.normpath(os.path.join(os.path.dirname(exe_path), '..', '..'))
+    with open(os.path.join(engine_dir, 'Build', 'Build.version'), encoding='utf-8') as f:
+        version = json.load(f)
+    folder = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'UnrealEngine',
+                          '%d.%d' % (version['MajorVersion'], version['MinorVersion']))
+    mcp_dir = os.path.join(folder, 'Saved', 'MCP')
+    if not os.path.isdir(mcp_dir):
+        raise RuntimeError('Editor command line has no .uproject and %s does not exist; pass the .uproject path' % mcp_dir)
+    return folder
+
+
 def auto_project():
     """With no project given, use the UnrealEditor listening on the MCP port, so the token matches the open project."""
     url = urlparse(os.environ.get('CLAUDE_CODE_MCP_SERVER_URL') or os.environ.get('UE_MCP_URL') or 'http://127.0.0.1:3000/mcp')
     pid = listening_pid(url.port or 80)
-    name, cmdline = process_info(pid)
+    name, cmdline, exe_path = process_info(pid)
     if not name.lower().startswith('unrealeditor'):
         raise RuntimeError('Port owner is not UnrealEditor')
     if sys.platform == 'darwin' and '.uproject' not in cmdline.lower():
         return project_from_open_files(pid)
+    if sys.platform == 'win32' and '.uproject' not in cmdline.lower() and exe_path:
+        return engine_user_dir(exe_path)
     return project_from_command_line(cmdline)
 
 

@@ -33,7 +33,7 @@ UE 5.8 官方 MCP（默认 8000/mcp，实验性、无鉴权）与 EngineWire 同
 
 - 先查再改，新增测试使用独立路径，覆盖前检查已有资产。编辑 .uasset 必须通过 UE API，不直接修改二进制。
 - 蓝图执行引脚水平对齐、流向从左到右、间距一致；纯数据节点放附近下方，保留用户手工排布。
-- 新建节点不必自己算坐标：`edit_graph batch` 和 `write_graph_from_code` 里不给 posX/posY 的节点由插件按规则排版（执行引脚水平、输入组居中、数据在执行行下方、分支另起一行、超长折行、各事件区域互不穿插、已有节点不动、插入时只右移受影响的一段），`arrange_nodes` 默认也用这套规则（UPSTREAM 第 28 项）。只有需要特殊摆放时才给坐标。
+- 新建节点不必自己算坐标：`edit_graph batch` 和 `write_graph_from_code` 里不给 posX/posY 的节点由插件按规则排版（执行引脚水平、输入组居中、数据在执行行下方、分支另起一行、超长折行、各事件区域互不穿插、已有节点不动、插入时只右移受影响的一段），`arrange_nodes` 默认也用这套规则（UPSTREAM 第 29 项）。只有需要特殊摆放时才给坐标。
 - 材质批次失败可能已部分写入，先读回再继续；超时也不能直接重复写入。
 - 优先原生 MCP 的明确能力，成熟批量 UE Python 也可使用。合理批量处理，不为强制省额度牺牲质量，也不做无意义重复查询。
 - 不自动保存所有脏关卡；切关卡与 PIE 前检查状态，只停止自己启动的测试。
@@ -105,4 +105,4 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 - 发射器互读：Scratch 输入类型 `NiagaraDataInterfaceParticleRead`，`set_niagara_data_interface properties {"EmitterBinding":{"BindingMode":"Other","EmitterName":"<另一个发射器>"}}`（自读用 Self）。VM 的 HLSL 里 out 参数变量先声明再传，不要 `int X = 0;` 后再传。
 - 邻域搜索：`setup_niagara_neighbor_grid`（仅 GPU 发射器）一次建网格、两个阶段和模块，输出 Particles.NeighborCount / Particles.Separation；再自己把 Separation 加到速度上，用 set_niagara_simulation_stage 调 Query 阶段迭代次数。单格上限 maxNeighborsPerCell，超出的粒子不进网格。
 - 发射器互读的 HLSL 里按索引读要带属性说明符：`Other.GetPositionByIndex<Attribute="Position">(i, bValid, Q)`，不带时 bValid 恒为 false。没有任何脚本读取的粒子属性会被裁掉、读不回，需要读回的值写进被使用的属性（如 Color）。
-- Data Channel：`create_niagara_data_channel` 建资产，蓝图用 Write To Niagara Data Channel 写入；CPU 发射器的 Scratch 输入 `NiagaraDataInterfaceDataChannelRead` 用 `set_niagara_data_interface` 设好 Channel 后可读到数据（PIE 实测 Num=3、坐标正确，约 1.5 秒后读粒子；UPSTREAM 第 27 项）。GPU 发射器读 NDC 未实测。
+- Data Channel：`create_niagara_data_channel` 建资产，蓝图用 Write To Niagara Data Channel 写入；CPU 发射器的 Scratch 输入 `NiagaraDataInterfaceDataChannelRead` 用 `set_niagara_data_interface` 设好 Channel 后可读到数据（PIE 实测 Num=3、坐标正确，约 1.5 秒后读粒子；UPSTREAM 第 28 项）。GPU 发射器读 NDC 未实测。
