@@ -6,7 +6,7 @@
 #include "Domains/BlueprintGraph/McpBPGraphBatchSteps.h"
 #include "EdGraph/EdGraph.h"
 #include "Foundation/GraphLayout/McpGraphNodeExtent.h"
-#include "Foundation/GraphLayout/McpLayered.h"
+#include "Foundation/GraphLayout/McpRuled.h"
 #include "K2Node_FunctionResult.h"
 
 namespace McpGraphCode
@@ -34,23 +34,24 @@ FVector2D FreeSpot(const UEdGraph* Graph)
     return Bottom > -TNumericLimits<float>::Max() ? FVector2D(Left, Bottom + 200.0f) : FVector2D::ZeroVector;
 }
 
-// A form that kept nodes: its new ones go beside the nodes they are wired to, as arrange_nodes settles them, and those
-// with no settled neighbour are laid out at the entry; kept nodes stay where they were.
-float SettleBeside(UBlueprint* Blueprint, const TArray<UEdGraphNode*>& Nodes, const TSet<UEdGraphNode*>& Kept)
+// A form's new nodes laid out in the house style (McpRuled) from its entry; an entry the graph had and kept nodes
+// stay where they are, a made entry starts its own region clear of the others, and the old body it replaces is not in
+// the way. Returns the lowest bottom edge of the form.
+float LayoutForm(UEdGraph* Graph, const TArray<UEdGraphNode*>& Nodes, const TSet<UEdGraphNode*>& Kept, const FVector2D& Spot,
+                 const TSet<UEdGraphNode*>& Replaced, bool bEntryMade)
 {
-    McpBlueprintGraphHandlers::GraphBatch::FBatchState State;
-    for (int32 At = 1; At < Nodes.Num(); ++At)
+    TArray<UEdGraphNode*> Free;
+    for (int32 At = bEntryMade ? 0 : 1; At < Nodes.Num(); ++At)
     {
         if (!Kept.Contains(Nodes[At]))
         {
-            Nodes[At]->NodePosX = -1000000 - At * 480;
-            Nodes[At]->NodePosY = -1000000;
-            State.AutoPlacedGuids.Add(Nodes[At]->NodeGuid.ToString());
+            Free.Add(Nodes[At]);
         }
     }
-    TArray<UEdGraphNode*> Rest = McpBlueprintGraphHandlers::GraphBatch::SettleAutoPlacedNodes(Blueprint, State);
-    Rest.Insert(Nodes[0], 0);
-    return McpLayered::LayoutNodes(Rest);
+    float Width = 0.0f;
+    float Height = 0.0f;
+    McpGraphLayout::EstimateNodeExtent(*Nodes[0], Width, Height);
+    return FMath::Max(Nodes[0]->NodePosY + Height, McpRuled::LayoutNodes(Graph, Free, &Spot, nullptr, &Replaced));
 }
 
 // Epic's _uses_symbol: the symbol anywhere in the forms.
@@ -236,20 +237,28 @@ bool BuildForms(UBlueprint* Blueprint, const TArray<FSExpr>& Forms, const TArray
     }
     Plan.Old.RemoveAll([&Transpiler](UEdGraphNode* Node) { return Transpiler.Kept.Contains(Node); });
     Plan.Kept = Transpiler.Kept.Num();
-    // ponytail: each form is laid out at its entry, so a body that grew can reach a neighbouring event's nodes;
-    // arrange_nodes moves them apart. Lay out the whole graph if that turns out common.
-    for (int32 At = 0; At < FormNodes.Num(); ++At)
+    // Each form is laid out among the others by region: McpRuled keeps every event's logic RegionGap clear of the rest.
+    const TSet<UEdGraphNode*> Replaced(Plan.Old);
+    // Forms on entries the graph has first, their logic growing where it is; then the made events, below all of it,
+    // so one event's region never ends up in among another's.
+    for (int32 Pass = 0; Pass < 2; ++Pass)
     {
-        if (!Plan.Entries[At])
+        if (Pass == 1)
         {
-            FormNodes[At][0]->NodePosX = FMath::RoundToInt(Spot.X);
-            FormNodes[At][0]->NodePosY = FMath::RoundToInt(Spot.Y);
+            Spot = FreeSpot(Plan.Graph);
         }
-        const bool bKeptAny = FormNodes[At].ContainsByPredicate([&Transpiler](UEdGraphNode* Node) { return Transpiler.Kept.Contains(Node); });
-        const float Bottom = bKeptAny ? SettleBeside(Blueprint, FormNodes[At], Transpiler.Kept) : McpLayered::LayoutNodes(FormNodes[At]);
-        if (!Plan.Entries[At])
+        for (int32 At = 0; At < FormNodes.Num(); ++At)
         {
-            Spot.Y = Bottom + 200.0f;
+            const bool bMade = Plan.Entries[At] == nullptr;
+            if (bMade != (Pass == 1))
+            {
+                continue;
+            }
+            const float Bottom = LayoutForm(Plan.Graph, FormNodes[At], Transpiler.Kept, Spot, Replaced, bMade);
+            if (bMade)
+            {
+                Spot.Y = Bottom + 200.0f;
+            }
         }
     }
     Made.Append(Transpiler.Made);

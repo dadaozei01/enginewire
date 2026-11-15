@@ -6,6 +6,14 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 
 ## [Unreleased]
 
+### Added (ruled Blueprint layout, UE 5.8 fork)
+- Nodes made without a position by `edit_graph` `batch` (build_graph) and `write_graph_from_code` are laid out in the house style (`Foundation/GraphLayout/McpRuled`): each exec run one row with its white exec pins level (node tops compensated per node shape: Set, subtitled calls, events); data inputs one column left of their reader, a group centred and evenly spread on its pins (three inputs: the middle one level with the second pin), a lone input level with its pin but below the white wire; deeper data under the row; a second exec output (Branch False, Completed) on its own row below; a row longer than 6000 units broken through two reroutes.
+- Regions: each event's or function's logic (nodes wired together) keeps 128 units clear of every other region, so one event's logic never sits in among another's; a new event's region is laid out as one block below the others.
+- Editing keeps the user's layout: nodes that existed (including an event a create step hands back) stay; a new chain going on from one keeps its line level, sliding right past what is in the way; a chain inserted between two existing nodes moves only the part of that region right of the insert (with the values it reads) over by what it needs.
+- `arrange_nodes` `layout: 'ruled'` is the new default (`beside` and `layered` remain).
+- Comment bubbles above nodes (the default disabled events' notes) count as occupied.
+- Automation test `EngineWire.Foundation.GraphLayout.Ruled`.
+
 ### Added (Niagara battle setup, UE 5.8 fork)
 - `get_niagara_particle_data` reads GPU emitters through a transient sim cache capture (Bool attributes excepted).
 - `setup_niagara_neighbor_grid` builds a NeighborGrid3D neighbour search (populate and query stages with Scratch modules) on a GPU emitter in one call.

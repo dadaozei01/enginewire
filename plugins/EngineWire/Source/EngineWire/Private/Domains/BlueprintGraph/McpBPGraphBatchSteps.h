@@ -19,6 +19,9 @@ struct FBatchState
     int32 AutoPlaced = 0;
     /** Guids of the nodes placed on that grid, for SettleAutoPlacedNodes. */
     TArray<FString> AutoPlacedGuids;
+    /** Guids of every node the Blueprint held when the batch began: a create step that hands one of them back (an
+     *  event the graph already has) did not make it, so the layout leaves it where it is. */
+    TSet<FString> ExistingGuids;
 };
 
 /**
@@ -89,4 +92,9 @@ UEdGraphNode* FindBatchNode(UBlueprint* Blueprint, const FString& Guid);
 /** Once every step ran, moves each auto-placed node beside a node it is wired to (arrange_nodes too).
  *  Returns the nodes that found no wired neighbour to settle by, or no free slot, and did not move. */
 TArray<UEdGraphNode*> SettleAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State);
+
+/** Once every step ran, lays the auto-placed nodes out in the house style (McpRuled), graph by graph: exec rows with
+ *  their exec pins level, inputs centred one column left of their readers, deeper data under the row. Nodes given a
+ *  position, and every node the graph held before, stay where they are. */
+void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State);
 }
