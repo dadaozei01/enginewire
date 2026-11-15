@@ -1,5 +1,16 @@
 # Windows 更新到最新 UE 5.8 版（给 Windows 上的 Agent）
 
+## 本轮任务：v0.8.0-ue58（2026-11-15）
+
+本机现在应装着 v0.7.0-ue58。这一版在 `main` 上新增三块代码，都只在 Mac clang 上编译过，需要在 Windows 上用 MSVC 编译、实测并打 Win64 包：
+
+- Niagara 模拟控制（UPSTREAM 第 27 项）：`McpNiagaraSimControl.cpp`（新）、`McpNiagaraModuleInfo.cpp`、`McpNiagaraInfoValidate.cpp`、`McpNiagaraScratch.cpp`。
+- Niagara 对战搭建与 NDC 修复（第 28 项）：`McpNiagaraBattleSetup.cpp`（新）、`McpNiagaraParticleData.cpp`（GPU 读回经 sim cache，链接 `UNiagaraSimCacheFunctionLibrary`）、`McpNiagaraDataInterfaceConfig.cpp`、`McpPropertyReflectionImport.cpp`。
+- 蓝图规则化自动排版（第 29 项）：`Foundation/GraphLayout/McpRuled.cpp`、`McpRuledNodes.cpp`、`McpRuledTests.cpp`（新）和 `Domains/BlueprintGraph` 下几个文件。
+
+照下面“默认路径”做完 1–9 步，**本轮第 6 步打包也要做**（`-Version v0.8.0-ue58`）。Mac 包和 Release 草稿由 Mac 端准备；用户明确说上传时，才把 ZIP 和校验文件传到已有草稿：`gh release upload v0.8.0-ue58 <ZIP> <SHA256SUMS-Win64.txt>`，不发布草稿、不改说明。链接报 LNK1194 时，先看是不是又从 NiagaraEditor 或别的延迟加载模块导入了静态数据符号（如 `UEdGraphSchema_Niagara::PinCategory*`），按第 26 项的做法改成同值的文件内常量。
+
+
 ## 默认路径
 
 优先级：先保证更新后能正常使用，其次才是速度和额度。任何时候都要让用户手上有一个能用的插件。
@@ -20,8 +31,8 @@
 6. 第 7 步同步本机手册。
 7. 任何一项实测失败而当场修不好：回退到旧版，再报告。回退方法：请用户关闭 UE，运行
    `powershell -ExecutionPolicy Bypass -File scripts\install-enginewire.ps1 -Package "<备份路径>" -Project "<工程>.uproject"`（引擎级安装改用 `-Engine`），打开工程确认 MCP :3000。
-8. 第 6 步打包只在用户要求发版时做。
-9. 报告按第 8 步，尽量简洁：编译是否通过（修了几轮、分支名、改了什么）、安装或回退结果、12 项实测逐项结果、手册同步情况。
+8. 第 6 步打包只在用户要求发版时做（本轮要做，见上面“本轮任务”）。
+9. 报告按第 8 步，尽量简洁（本轮加上 ZIP 路径与 SHA256）：编译是否通过（修了几轮、分支名、改了什么）、安装或回退结果、12 项实测逐项结果、手册同步情况。
 
 ---
 
