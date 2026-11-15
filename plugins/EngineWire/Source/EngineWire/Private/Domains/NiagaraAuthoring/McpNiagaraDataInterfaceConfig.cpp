@@ -74,12 +74,16 @@ struct FDITarget
     bool bUserExists = false;
 };
 
+// Same value as UEdGraphSchema_Niagara::PinCategoryType. Importing that static FName from NiagaraEditor
+// breaks /DELAYLOAD on Win64 (LNK1194: data symbols cannot be delay-loaded).
+static const FName NiagaraDIConfigPinCategoryType(TEXT("Type"));
+
 // Read the override without the mutating GetOrCreate helper or the unexported GetStackFunctionInputOverridePin.
 UEdGraphPin* FindOverridePin(const FDITarget& Target)
 {
     for (UEdGraphPin* Pin : Target.Function->Pins)
     {
-        if (Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != UEdGraphSchema_Niagara::PinCategoryType
+        if (Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != NiagaraDIConfigPinCategoryType
             || Pin->PinType.PinSubCategoryObject != FNiagaraTypeDefinition::GetParameterMapDef().GetStruct()) continue;
         if (Pin->LinkedTo.Num() != 1) continue;
         UEdGraphNode* Upstream = Pin->LinkedTo[0]->GetOwningNode();
