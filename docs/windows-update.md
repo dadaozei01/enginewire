@@ -8,7 +8,7 @@
 - Niagara 对战搭建与 NDC 修复（第 28 项）：`McpNiagaraBattleSetup.cpp`（新）、`McpNiagaraParticleData.cpp`（GPU 读回经 sim cache，链接 `UNiagaraSimCacheFunctionLibrary`）、`McpNiagaraDataInterfaceConfig.cpp`、`McpPropertyReflectionImport.cpp`。
 - 蓝图规则化自动排版（第 29 项）：`Foundation/GraphLayout/McpRuled.cpp`、`McpRuledNodes.cpp`、`McpRuledTests.cpp`（新）和 `Domains/BlueprintGraph` 下几个文件。
 
-照下面“默认路径”做完 1–9 步，**本轮第 6 步打包也要做**（`-Version v0.8.0-ue58`）。Mac 包和 Release 草稿由 Mac 端准备；用户明确说上传时，才把 ZIP 和校验文件传到已有草稿：`gh release upload v0.8.0-ue58 <ZIP> <SHA256SUMS-Win64.txt>`，不发布草稿、不改说明。链接报 LNK1194 时，先看是不是又从 NiagaraEditor 或别的延迟加载模块导入了静态数据符号（如 `UEdGraphSchema_Niagara::PinCategory*`），按第 26 项的做法改成同值的文件内常量。
+照下面“默认路径”做完 1–9 步，**本轮第 6 步打包也要做**（`-Version v0.8.0-ue58`）。v0.8.0-ue58 的 Release 已作为预发布版发出（目前只有 Mac 包）；用户明确说上传时，才把 ZIP 和校验文件传上去：`gh release upload v0.8.0-ue58 <ZIP> <SHA256SUMS-Win64.txt>`。说明正文里“Win64 包待补”那句和标题里的“(Mac)”交给用户或 Mac 端改，不要自己改。链接报 LNK1194 时，先看是不是又从 NiagaraEditor 或别的延迟加载模块导入了静态数据符号（如 `UEdGraphSchema_Niagara::PinCategory*`），按第 26 项的做法改成同值的文件内常量。
 
 
 ## 默认路径
