@@ -9,7 +9,10 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 ### Added (Niagara battle setup, UE 5.8 fork)
 - `get_niagara_particle_data` reads GPU emitters through a transient sim cache capture (Bool attributes excepted).
 - `setup_niagara_neighbor_grid` builds a NeighborGrid3D neighbour search (populate and query stages with Scratch modules) on a GPU emitter in one call.
-- `create_niagara_data_channel` creates a Niagara Data Channel asset with its variables. Reading it from an emitter did not work in testing (UPSTREAM item 27).
+- `create_niagara_data_channel` creates a Niagara Data Channel asset with its variables. A CPU emitter reads it after `set_niagara_data_interface` binds the read DI (UPSTREAM item 27); a GPU emitter reading it is untested.
+
+### Fixed (Niagara, UE 5.8 fork)
+- `set_niagara_data_interface` no longer blanks compile-time DI state when it syncs runtime instances: it calls `PostCompile` on each resolved instance after copying, so an NDC read DI binds and returns data (before, `Num` stayed 0).
 - The reflection writer accepts uint32 properties.
 
 ### Added (Niagara simulation control, UE 5.8 fork)

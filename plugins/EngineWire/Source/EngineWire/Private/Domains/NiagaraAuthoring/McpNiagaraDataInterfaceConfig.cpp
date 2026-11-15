@@ -468,6 +468,14 @@ bool SyncCompiledDI(FActionContext& Context, FDITarget& Target)
             }
         }
     });
+    // CopyTo also copies compile-time state that only PostCompile fills in (e.g. the NDC read DI's CompiledData).
+    // The editor-graph source never ran PostCompile, so every copy above blanked it: the NDC reader then believes
+    // no script calls it and never binds (Num() stays 0). A resolved runtime DI is often the very object held as a
+    // cached default, so this runs once, after all copies, on each resolved instance.
+    for (UNiagaraDataInterface* Instance : Updated)
+    {
+        Instance->PostCompile(*Target.System);
+    }
     bOk &= !Updated.IsEmpty() && CachedCount > 0;
     Context.Result->SetBoolField(TEXT("runtimeSynced"), bOk);
     Context.Result->SetNumberField(TEXT("runtimeInstancesUpdated"), Updated.Num());
