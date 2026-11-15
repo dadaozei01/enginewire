@@ -92,7 +92,7 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 
 先 search「remove niagara user parameter」并 describe，使用 `remove_niagara_user_parameter` 的 consentGrant 执行。只接收 `systemPath` 与 `name`（`X` 或 `User.X`），先关闭该系统的资产编辑器。预检返回 PARAMETER_IN_USE 时读 references[] 并在编辑器里手动处理；REFERENCE_SCAN_INCOMPLETE 表示源不可检查，禁止当成没有引用。没有 force 或改名能力：原生 ViewModel 引用同步接口未导出，不能靠直接改 store 安全替代。需要改名时先加新参数，手动迁移引用，再删旧参数。
 
-发射器开关：`edit_niagara_system edit=set_emitter_properties` 的 `emitterProperties` 接受 `enabled`、`localSpace`、`determinism`（布尔）和 `moduleEnabled`（{模块名: 布尔}），会重编译；其他属性用 set_parameter_value 或 inspect.set_property。`create_effect kind=niagara_emitter` 会给空的精灵材质槽填默认精灵材质。截图看不到粒子时，先用 control_editor configure_editor setting=window unthrottle 再开视口 realtime。GPU 发射器的粒子数据读不到（NOT_SUPPORTED），只能截图核对。
+发射器开关：`edit_niagara_system edit=set_emitter_properties` 的 `emitterProperties` 接受 `enabled`、`localSpace`、`determinism`（布尔）和 `moduleEnabled`（{模块名: 布尔}），会重编译；其他属性用 set_parameter_value 或 inspect.set_property。`create_effect kind=niagara_emitter` 会给空的精灵材质槽填默认精灵材质。截图看不到粒子时，先用 control_editor configure_editor setting=window unthrottle 再开视口 realtime。GPU 发射器的粒子数据经 sim cache 读回（见下节，Bool 除外）。
 
 成功删除为一个撤销步骤，请求编译并标脏，始终 saved=false。检查 compileOk、warnings、diEntriesBefore/After、diEntriesConsistent；原 DI 数据的撤销恢复和编译状态须读回验证。编译中的内联 DI 与用户 DI 是不同集合，不能用两个总数相等作为一致性判据。扫描为保守的本系统/递归脚本图与绑定检查，不是工程范围、外部 HLSL include 或宏的语义引用分析，详见 UPSTREAM 24。仅在用户授权时单独保存目标系统。
 
@@ -104,4 +104,5 @@ get 不创建 override、不编译或保存；返回 mode=inline/linked/default�
 - GPU 粒子：`get_niagara_particle_data` 对 GPU 发射器经 sim cache 读回（同步，回执 readbackMs），暂停帧也可读；Bool 属性读不回，改写成 Int。
 - 发射器互读：Scratch 输入类型 `NiagaraDataInterfaceParticleRead`，`set_niagara_data_interface properties {"EmitterBinding":{"BindingMode":"Other","EmitterName":"<另一个发射器>"}}`（自读用 Self）。VM 的 HLSL 里 out 参数变量先声明再传，不要 `int X = 0;` 后再传。
 - 邻域搜索：`setup_niagara_neighbor_grid`（仅 GPU 发射器）一次建网格、两个阶段和模块，输出 Particles.NeighborCount / Particles.Separation；再自己把 Separation 加到速度上，用 set_niagara_simulation_stage 调 Query 阶段迭代次数。单格上限 maxNeighborsPerCell，超出的粒子不进网格。
-- Data Channel：`create_niagara_data_channel` 建资产，蓝图用 Write To Niagara Data Channel 写入可用；发射器里用 DataChannelRead 读取目前实测读到 0（UPSTREAM 第 27 项），命中点暂用用户参数数组传入。
+- 发射器互读的 HLSL 里按索引读要带属性说明符：`Other.GetPositionByIndex<Attribute="Position">(i, bValid, Q)`，不带时 bValid 恒为 false。没有任何脚本读取的粒子属性会被裁掉、读不回，需要读回的值写进被使用的属性（如 Color）。
+- Data Channel：`create_niagara_data_channel` 建资产，蓝图用 Write To Niagara Data Channel 写入；CPU 发射器的 Scratch 输入 `NiagaraDataInterfaceDataChannelRead` 用 `set_niagara_data_interface` 设好 Channel 后可读到数据（PIE 实测 Num=3、坐标正确，约 1.5 秒后读粒子；UPSTREAM 第 27 项）。GPU 发射器读 NDC 未实测。

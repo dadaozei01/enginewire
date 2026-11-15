@@ -6,6 +6,8 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 
 ## [Unreleased]
 
+## [0.8.0-ue58] - 2026-11-15
+
 ### Added (ruled Blueprint layout, UE 5.8 fork)
 - Nodes made without a position by `edit_graph` `batch` (build_graph) and `write_graph_from_code` are laid out in the house style (`Foundation/GraphLayout/McpRuled`): each exec run one row with its white exec pins level (node tops compensated per node shape: Set, subtitled calls, events); data inputs one column left of their reader, a group centred and evenly spread on its pins (three inputs: the middle one level with the second pin), a lone input level with its pin but below the white wire; deeper data under the row; a second exec output (Branch False, Completed) on its own row below; a row longer than 6000 units broken through two reroutes.
 - Regions: each event's or function's logic (nodes wired together) keeps 128 units clear of every other region, so one event's logic never sits in among another's; a new event's region is laid out as one block below the others.
@@ -30,6 +32,11 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 - `get_niagara_info` reports each module's stage, simulation stage and order, each emitter's simulation stages, and renderer facing/alignment/locked-axis settings and orientation bindings.
 - `create_niagara_scratch_module` accepts a simulation stage name for `stage`.
 - Verified on BP_Test 5.8.4 Mac (UPSTREAM item 26).
+
+## [0.7.0-ue58] - 2026-11-09
+
+### Fixed (Windows, UE 5.8 fork)
+- Win64 links with NiagaraEditor delay-loaded: Niagara schema pin-category FNames are no longer imported (LNK1194).
 
 ### Added (Niagara data-interface instances, UE 5.8 fork)
 - `set_niagara_data_interface` configures concrete DI instances on emitter module inputs or system user parameters after transient property validation; `get_niagara_data_interface` reads inline/linked/default mode and editable properties, with array length/truncation metadata. Module updates compile and explicitly synchronize runtime and cached-default DIs; user parameters do not require an emitter or an explicit compile. Adds the existing NiagaraCore link dependency for OnChanged.

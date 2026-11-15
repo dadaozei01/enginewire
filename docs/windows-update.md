@@ -9,19 +9,19 @@
 1. 第 0 步全做（只读，很快）。
 2. 第 1 步原样执行。
 3. 第 2 步直接完整编译（跳过 `-CheckOnly`）。编译失败时自己修到编过为止：
-   - 先 `git switch -c fix/win-msvc-niagara`。
+   - 先 `git switch -c fix/win-msvc-v080`。
    - 看脚本打印的“Distinct errors”，每个报错先看报错行附近，不够再扩大范围；一轮把本次报错一起改完再重编（脚本自动用新的输出目录）。
    - 第 3 节表格里的问题直接改；表格外但原因清楚、只涉及 EngineWire 源码的编译问题也可以改，在报告里逐条说明。
    - 不设轮数上限，只要每轮报错在减少就继续。连续两轮报错没有减少，或需要改引擎、VS、SDK 配置，或要改 `#if ENGINE_*` 版本条件，才停下报告。
-   - 编过后提交并推送这个分支（`git push -u origin fix/win-msvc-niagara`），用这次的编译结果安装。不合并、不推送 `main`。
+   - 编过后提交并推送这个分支（`git push -u origin fix/win-msvc-v080`），用这次的编译结果安装。不合并、不推送 `main`。
    - 实在编不过：不安装，旧插件保持原样，用户继续用旧版。
 4. 第 4 步安装（先请用户关闭 UE），记下脚本打印的备份路径。
-5. 第 5 步 1–9 项全部做完。
+5. 第 5 步 1–12 项全部做完。
 6. 第 7 步同步本机手册。
 7. 任何一项实测失败而当场修不好：回退到旧版，再报告。回退方法：请用户关闭 UE，运行
    `powershell -ExecutionPolicy Bypass -File scripts\install-enginewire.ps1 -Package "<备份路径>" -Project "<工程>.uproject"`（引擎级安装改用 `-Engine`），打开工程确认 MCP :3000。
 8. 第 6 步打包只在用户要求发版时做。
-9. 报告按第 8 步，尽量简洁：编译是否通过（修了几轮、分支名、改了什么）、安装或回退结果、9 项实测逐项结果、手册同步情况。
+9. 报告按第 8 步，尽量简洁：编译是否通过（修了几轮、分支名、改了什么）、安装或回退结果、12 项实测逐项结果、手册同步情况。
 
 ---
 
@@ -59,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1
 
 ## 3. MSVC 报错怎么处理
 
-UPSTREAM 第 19–25 项的 Niagara 代码只在 Mac clang 上编译过。下面这些属于 clang 与 MSVC 的差异，可以做最小修改：
+UPSTREAM 第 19–25 项已在 v0.7.0-ue58 用 MSVC 编译通过（当时的修复已合入 `main`）；第 26–28 项（Niagara 模拟控制与对战搭建、蓝图规则化排版，新文件 `McpNiagaraBattleSetup.cpp`、`Foundation/GraphLayout/McpRuled*.cpp`）只在 Mac clang 上编译过。下面这些属于 clang 与 MSVC 的差异，可以做最小修改：
 
 | 报错 | 原因 | 改法 |
 |---|---|---|
@@ -75,7 +75,7 @@ UPSTREAM 第 19–25 项的 Niagara 代码只在 Mac clang 上编译过。下面
 规则：
 
 - 上表的问题直接改；表格外但原因清楚、只涉及 EngineWire 源码的编译问题也可以改，报告里逐条说明。需要改引擎、VS、SDK 配置或 `#if ENGINE_*` 版本条件时停下报告。
-- 修改提交到新分支 `fix/win-msvc-niagara`（脚本问题用 `fix/win-scripts`），推送该分支，不合并、不推送 `main`。每改一轮重新运行编译脚本，用新的输出目录。
+- 修改提交到新分支 `fix/win-msvc-v080`（脚本问题用 `fix/win-scripts`），推送该分支，不合并、不推送 `main`。每改一轮重新运行编译脚本，用新的输出目录。
 - 报告里附 diff 和对应报错原文。
 
 ## 4. 安装
@@ -105,17 +105,20 @@ powershell -ExecutionPolicy Bypass -File scripts\install-enginewire.ps1 -Package
 6. `add_user_parameter` 加 Float 参数 `TmpDel`，不引用，`remove_niagara_user_parameter` 删除（带 describe 返回的 consentGrant）成功。
 7. 复制 `NS_A_CTest`，`edit_niagara_system edit=enable_gpu_simulation`（`fixedBoundsEnabled` true），`apply` 的 `compileOk` 为 true；`configure_editor setting=window unthrottle`，`configure_viewport setting=realtime enabled=true`，截图能看到粒子。
 8. `control_editor play control=play`，在 PIE 中读一次粒子数据，`control=stop`；查日志中有没有新的 Niagara 错误。
-9. 删除所有 `_CTest` 资产和放置的 Actor。
+9. 把第 7 步的 GPU 副本放进关卡，`get_niagara_particle_data` 能读回粒子（回执带 readbackMs）；`set_niagara_sim_target target=CPU` 后 `compileOk` 为 true，`step_niagara_simulation reset=true frames=1` 成功，再 `frames=1` 一次，两次读回的粒子位置不同。
+10. 蓝图自动排版：新建 `/Game/EwTest/BP_Layout_CTest`（Actor），`manage_blueprint` 的 `edit_graph` `batch` 在 BeginPlay 后接 Branch（条件来自一个比较节点），True 接 PrintString、False 接 Delay，节点都不给坐标；编译通过，读图确认执行节点从左到右、False 分支在 True 行下方、节点不重叠。
+11. 运行自动化测试 `EngineWire.Foundation.GraphLayout.Ruled`（`system_control` 的 run_tests 或编辑器 Session Frontend），结果为通过。
+12. 删除所有 `_CTest` 资产和放置的 Actor。
 
 ## 6. 打包（不发布）
 
 编译与实测都通过后：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1 -Zip -Version v0.7.0-ue58
+powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1 -Zip -Version v0.8.0-ue58
 ```
 
-在 `%USERPROFILE%\Builds\release-v0.7.0-ue58\` 生成 `EngineWire-v0.7.0-ue58-UE5.8.4-Win64.zip`（根目录为 EngineWire，不含 PDB 和 Intermediate）与 `SHA256SUMS-Win64.txt`。不要上传 Release。
+在 `%USERPROFILE%\Builds\release-v0.8.0-ue58\` 生成 `EngineWire-v0.8.0-ue58-UE5.8.4-Win64.zip`（根目录为 EngineWire，不含 PDB 和 Intermediate）与 `SHA256SUMS-Win64.txt`。不要上传 Release。
 
 ## 7. 同步本机手册
 

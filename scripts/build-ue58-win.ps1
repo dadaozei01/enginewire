@@ -3,7 +3,7 @@ Build EngineWire for UE 5.8 on Windows x64. Run from a checkout of main (UE 5.8)
 
   powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1 -CheckOnly
   powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1
-  powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1 -Zip -Version v0.7.0-ue58
+  powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1 -Zip -Version v0.8.0-ue58
 
 Options:
   -Engine <dir>    UE 5.8 root (the folder holding Engine\). Found from the registry or common paths when omitted.

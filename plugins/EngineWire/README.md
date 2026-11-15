@@ -28,6 +28,8 @@ Clients reach it in one of two ways:
 
 The full list is the generated [Action Reference](https://github.com/ChiR24/Unreal_mcp/blob/dev/docs/action-reference.generated.md).
 
+This UE 5.8 fork ([dadaozei01/enginewire](https://github.com/dadaozei01/enginewire)) adds Chaos Geometry Collection fracture; Niagara Scratch modules with Custom HLSL and data-interface inputs, data-interface instance setup, CPU and GPU particle readback, CPU/GPU switching, frame stepping, simulation stages, a one-call NeighborGrid3D setup and Niagara Data Channels; and a ruled auto-layout for Blueprint nodes made without a position (exec pins level, inputs centred, regions kept apart, existing nodes left in place). Verified scope per platform is in [UPSTREAM.md](https://github.com/dadaozei01/enginewire/blob/main/UPSTREAM.md); changes are in [CHANGELOG.md](CHANGELOG.md).
+
 ---
 
 ## Requirements

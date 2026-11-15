@@ -20,6 +20,7 @@
 3. **截图目录写死**：`McpUiScreenshot.cpp` 默认写到 `Saved/Screenshots/WindowsEditor`，Mac 上也是这个路径。应改为按平台取目录。
 4. **蓝图文本的已知限制**（上游也有）：转接点（Reroute）写回后不保留；非纯的 SphereTraceForObjects 被内联进 BreakHitResult，Branch 的 else 接 DoOnce.Reset 在文本中没有体现，写回时 `MakeArray("ObjectTypeQuery6")` 连不上 ObjectTypes，返回 CODE_INVALID。
 5. **UPSTREAM.md 第 17 项过时**：其中写的"源码在 `build/ue58`，未合并到 `main`"已不符合现状，`main` 现在就是 5.8 主线。
+6. **`simulate_input` 的 `key_tap` 在非 PIE 时让编辑器崩溃**（第 28 项发现，`McpEditorInput.cpp:62`，与上游 #685 同类），可用 key_down + key_up 规避。
 
 ## 可单独搬过来的上游修复（不必整体升级）
 
@@ -33,8 +34,8 @@
 
 ## 尚未验证
 
-- Niagara Scratch 系列（第 19–25 项）只在 Mac UE 5.8 上测过；Windows 还没编译，5.4 没有这些功能。
+- Niagara Scratch 系列（第 19–25 项）已在 v0.7.0-ue58 于 Windows 编译并实测；5.4 没有这些功能。第 26–28 项（模拟控制、对战搭建、蓝图规则化排版）Windows 还没编译。
 - 编辑器长时间运行后退出的稳定性，Windows 上没有专门观察过。
 - 插件装在引擎目录时的情况；Fracture 和 PlanarCut 真正缺失时能否启动。
 - Niagara 模拟控制（第 26 项）只在 Mac UE 5.8 编译实测；PIE 中逐帧、局部空间、多组件 componentName 和 Windows 编译未验证。
-- Niagara 第 27 项待查：发射器 DataChannelRead 读 NDC 为 0（蓝图写入已确认到达游戏侧）；CPU 发射器上仿真阶段的写入未体现；关闭编辑器时 GC 中 BreakLinkTo 崩溃一次，疑与 DI 回滚不完整有关；GPU 读回不支持 Bool。
+- Niagara 第 27 项待查：CPU 发射器读 NDC 为 0 已于 2026-11-15 修复（GPU 发射器读 NDC 未测）；CPU 发射器上仿真阶段的写入未体现；`set_emitter_properties` 的 moduleEnabled 对 EmitterUpdate 模块（如 SpawnRate）不生效却报成功；`step_niagara_simulation reset=true` 让一次性 burst 触发两次；PIE 停止时出现过一次 SceneViewport.cpp:196 IsInGameThread 断言（之前用过 unthrottle）；关闭编辑器时 GC 中 BreakLinkTo 崩溃一次，疑与 DI 回滚不完整有关；GPU 读回不支持 Bool。
