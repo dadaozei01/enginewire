@@ -1,6 +1,7 @@
 #include "Domains/BlueprintGraph/McpBPGraphBatchSteps.h"
 
 #include "Foundation/BridgeHelpers/Responses/McpJsonFields.h"
+#include "Foundation/GraphLayout/McpRuled.h"
 
 #include "EdGraphSchema_K2.h"
 
@@ -198,7 +199,8 @@ FMcpCapturedResponse RunPlacedStep(const FActionContext& Parent, FBatchState& St
         Reply = RunStep(Parent, Payload, Edit, StepId, OutPins);
     }
     FString CreatedGuid;
-    if (bAuto && Reply.bSuccess && Reply.Result.IsValid() && Reply.Result->TryGetStringField(TEXT("nodeGuid"), CreatedGuid))
+    if (bAuto && Reply.bSuccess && Reply.Result.IsValid() && Reply.Result->TryGetStringField(TEXT("nodeGuid"), CreatedGuid) &&
+        !State.ExistingGuids.Contains(CreatedGuid))
     {
         State.AutoPlacedGuids.Add(CreatedGuid);
     }
@@ -281,5 +283,22 @@ TArray<UEdGraphNode*> SettleAutoPlacedNodes(UBlueprint* Blueprint, const FBatchS
         bRelax = !bMoved;
     }
     return Pending;
+}
+
+void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
+{
+    TMap<UEdGraph*, TArray<UEdGraphNode*>> ByGraph;
+    for (const FString& Guid : State.AutoPlacedGuids)
+    {
+        UEdGraphNode* Node = FindBatchNode(Blueprint, Guid);
+        if (Node && Node->GetGraph())
+        {
+            ByGraph.FindOrAdd(Node->GetGraph()).Add(Node);
+        }
+    }
+    for (const TPair<UEdGraph*, TArray<UEdGraphNode*>>& Each : ByGraph)
+    {
+        McpRuled::LayoutNodes(Each.Key, Each.Value);
+    }
 }
 }

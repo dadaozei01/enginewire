@@ -208,6 +208,18 @@ bool RunGraphBatch(FActionContext& Context, int32 MaxSteps, bool bCompile)
             }
         }
     }
+    TArray<UEdGraph*> AllGraphs;
+    Context.Blueprint->GetAllGraphs(AllGraphs);
+    for (const UEdGraph* Graph : AllGraphs)
+    {
+        for (const UEdGraphNode* Existing : Graph ? Graph->Nodes : decltype(Graph->Nodes)())
+        {
+            if (Existing)
+            {
+                State.ExistingGuids.Add(Existing->NodeGuid.ToString());
+            }
+        }
+    }
 
     TArray<TSharedPtr<FJsonValue>> Results;
     TSharedPtr<FJsonObject> NodeIds = MakeShared<FJsonObject>();
@@ -242,7 +254,7 @@ bool RunGraphBatch(FActionContext& Context, int32 MaxSteps, bool bCompile)
         return true;
     }
 
-    SettleAutoPlacedNodes(Context.Blueprint, State);
+    LayoutAutoPlacedNodes(Context.Blueprint, State);
     TSharedPtr<FJsonObject> Result = McpHandlerUtils::CreateResultObject();
     McpSetBatchSteps(Result, Results, NodeIds);
     Result->SetNumberField(TEXT("succeeded"), Results.Num());

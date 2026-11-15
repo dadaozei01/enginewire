@@ -3,6 +3,7 @@
 #include "Foundation/BridgeHelpers/Responses/McpJsonFields.h"
 
 #include "Foundation/GraphLayout/McpLayered.h"
+#include "Foundation/GraphLayout/McpRuled.h"
 #include "Foundation/McpScopedEditorTransaction.h"
 #include "ScopedTransaction.h"
 
@@ -124,7 +125,9 @@ bool DeleteNodes(FActionContext& Context)
 // ones are parked out of the way first, so their old spots block nothing; one with no wired neighbour
 // left in place, or no free slot near it, goes back where it was and is named under unmoved. layout
 // "layered" instead lays the listed nodes out in columns along the links among them (McpLayered), the
-// first listed staying where it is.
+// first listed staying where it is. "ruled" (the default) lays them out in the house style (McpRuled): exec rows with
+// their exec pins level, inputs centred one column left of their readers, deeper data under the row; the nodes left
+// out stay put, anchor them and are kept clear of.
 bool ArrangeNodes(FActionContext& Context)
 {
     if (Context.SubAction != TEXT("arrange_nodes"))
@@ -155,7 +158,9 @@ bool ArrangeNodes(FActionContext& Context)
     TArray<TSharedPtr<FJsonValue>> Stayed;
     TArray<TSharedPtr<FJsonValue>> InPlace;
     TMap<UEdGraphNode*, FIntPoint> Original;
-    const bool bLayered = GetJsonStringField(Context.Payload, TEXT("layout")) == TEXT("layered");
+    const FString Layout = GetJsonStringField(Context.Payload, TEXT("layout"));
+    const bool bLayered = Layout == TEXT("layered");
+    const bool bRuled = Layout.IsEmpty() || Layout == TEXT("ruled");
     {
         // One undo step for the moves. It closes before the save below: a save inside it left the file holding
         // the new positions while undo put the old ones back in memory.
@@ -168,7 +173,7 @@ bool ArrangeNodes(FActionContext& Context)
             UEdGraphNode* Node = CastChecked<UEdGraphNode>(Object);
             Original.Add(Node, FIntPoint(Node->NodePosX, Node->NodePosY));
             Listed.Add(Node);
-            if (!bLayered)
+            if (!bLayered && !bRuled)
             {
                 Node->NodePosX = -1000000 - Original.Num() * 480;
                 Node->NodePosY = -1000000;
@@ -179,7 +184,11 @@ bool ArrangeNodes(FActionContext& Context)
         {
             McpLayered::LayoutNodes(Listed);
         }
-        const TArray<UEdGraphNode*> Unmoved = bLayered ? TArray<UEdGraphNode*>() : GraphBatch::SettleAutoPlacedNodes(Context.Blueprint, State);
+        if (bRuled)
+        {
+            McpRuled::LayoutNodes(Context.TargetGraph, Listed);
+        }
+        const TArray<UEdGraphNode*> Unmoved = bLayered || bRuled ? TArray<UEdGraphNode*>() : GraphBatch::SettleAutoPlacedNodes(Context.Blueprint, State);
         for (const TPair<UEdGraphNode*, FIntPoint>& Entry : Original)
         {
             UEdGraphNode* Node = Entry.Key;
@@ -216,7 +225,7 @@ bool ArrangeNodes(FActionContext& Context)
     Result->SetArrayField(TEXT("unmoved"), Stayed);
     Result->SetArrayField(TEXT("alreadyInPlace"), InPlace);
     Context.SendResponse(FString::Printf(TEXT("Moved %d of %d nodes %s (%d already there)."), Moved.Num(), Original.Num(),
-                                         bLayered ? TEXT("into columns along their links") : TEXT("beside the nodes they are wired to"),
+                                         bRuled ? TEXT("into rows by the house style") : bLayered ? TEXT("into columns along their links") : TEXT("beside the nodes they are wired to"),
                                          InPlace.Num()),
                          Result);
     return true;

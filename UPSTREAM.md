@@ -200,4 +200,8 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
 
    其他：关闭编辑器时出现过一次崩溃（GC 中 `UEdGraphNode::BeginDestroy → UEdGraphPin::BreakLinkTo`），前序操作里有一次 `set_niagara_data_interface` 编译失败回滚并报 rolledBack=false（第 23 项已知限制），疑相关，未复现确认。最后一个文案级修改（GPU 拒绝 Bool 的提示）只编译未装机复测。
 
+28. 蓝图规则化自动排版（2026-11-15，UE 5.8.4 Mac）：`edit_graph batch`（build_graph）与 `write_graph_from_code` 不给坐标的节点、以及 `arrange_nodes`（默认 `layout: ruled`）按用户手排风格摆放，代码在 `Foundation/GraphLayout/McpRuled.cpp`（纯几何）、`McpRuledNodes.cpp`（节点形态估算与应用）、`McpRuledTests.cpp`。目标样式取自用户手排的 BP_Manager（只读量取）：执行引脚中心水平（Set 节点 +16、带 “Target is” 副标题的调用与自定义事件 −16）、执行节点净间距 96、数据列净间距 48、单个输入与引脚水平但不压白线、多级数据放执行行下方、分支第二出口另起一行、超长行（>6000）经两个转接点折行。区域：按连线分区，事件与事件之间留 128，新事件整体放在其他区域下方。改已有图：已有节点不动（批量里 create_node 返回的已有事件也不动）；接在已有节点后的新链保持同一水平线、向右避让；插在两个已有节点之间时只把该区域插入点右侧部分（连同只供它们读取的数值节点）整体右移。节点尺寸与引脚位置是估算（Slate 实测尺寸在无界面路径拿不到），宽 CJK 变量名、拆分结构体、高级引脚需目测。
+   实测（Claude 经 MCP，测试蓝图 `/Game/MCPTest/BP_LayoutTest*`）：79 步批量（多输入比较、Branch 双分支、FInterpTo 三输入、20 个 PrintString 长链）编译通过，长链在第 17 个后折行并生成两个转接点；`write_graph_from_code` 写 BeginPlay/Tick/自定义事件三个区域互不穿插；在已有 Branch→PrintString 之间插入 Delay，右侧段整体右移 296。单测 `EngineWire.Foundation.GraphLayout.Ruled` 通过。
+   发现的旧问题（未改）：`control_editor simulate_input` 的 `key_tap` 在非 PIE 时松键回调对空 PlayWorld 调 `GetWorldSettings` 导致编辑器崩溃（`McpEditorInput.cpp` 第 62 行），可用 key_down + key_up 规避。
+
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。
