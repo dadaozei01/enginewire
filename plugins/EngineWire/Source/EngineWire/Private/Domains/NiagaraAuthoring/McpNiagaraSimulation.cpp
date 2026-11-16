@@ -7,7 +7,7 @@ static bool EnableGpuSimulation(FActionContext& Context)
 #if MCP_HAS_NIAGARA_INPUT_OVERRIDES && ENGINE_MINOR_VERSION >= 8
     // target CPU or GPU (default GPU, as before); the switch recompiles and reports per script.
     return SetEmitterSimTarget(Context);
-#endif
+#else
     UNiagaraSystem* System = nullptr;
     FNiagaraEmitterHandle* Handle = nullptr;
     if (!LoadSystemAndEmitter(Context, System, Handle))
@@ -50,6 +50,7 @@ static bool EnableGpuSimulation(FActionContext& Context)
     Context.Result->SetStringField(TEXT("message"), FString::Printf(TEXT("Enabled GPU simulation for emitter '%s'."), *Context.EmitterName));
     Context.SendSuccess(true, TEXT("GPU simulation enabled."));
     return true;
+#endif
 }
 
 static bool AddSimulationStage(FActionContext& Context)
