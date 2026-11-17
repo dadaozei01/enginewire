@@ -136,7 +136,7 @@ public:
             Feeds(Node, FVector2D::ZeroVector, Inputs);
             if (Inputs.Nodes.Num() > 0)
             {
-                PlaceBlock(Inputs, Pos[Node]);
+                PlaceBlock(Inputs, Pos[Node], false, static_cast<float>(Pos[Node].Y));
             }
         }
         // Pure nodes no free node reads: beside the placed node that reads them, else at the origin.
@@ -194,6 +194,8 @@ private:
     TMap<int32, TArray<int32>> RowOfBreak;
     TMap<int32, float> RowLeftOfBreak;
     float NextRootY = 0.0f;
+    // No line to keep: PlaceBlock only moves the block itself.
+    static constexpr float NoLine = -1.0e30f;
 
     bool IsFree(int32 Node) const
     {
@@ -366,15 +368,214 @@ private:
         return Need;
     }
 
-    // Puts Part's local origin at Want, moved down until it touches nothing (NeedDown). With bSlide a row that goes on
-    // from a node keeps its white line level by moving right instead, when a free spot is near enough and no other
-    // region lies between.
-    FVector2D PlaceBlock(const FPart& Part, FVector2D Want, bool bSlide = false)
+    bool IsPlaced(int32 Node) const
+    {
+        return Done[Node] && (!IsFree(Node) || Settled.Contains(Node));
+    }
+
+    struct FSnapshot
+    {
+        TArray<FVector2D> Pos;
+        TArray<FBox2D> Obstacles;
+        TArray<FRowBreak> Breaks;
+    };
+    FSnapshot Save() const
+    {
+        return FSnapshot{Pos, ObstacleAt, Breaks};
+    }
+    void Restore(const FSnapshot& Snapshot)
+    {
+        Pos = Snapshot.Pos;
+        ObstacleAt = Snapshot.Obstacles;
+        Breaks = Snapshot.Breaks;
+        RebuildPlaced();
+    }
+
+    // Makes room for Part at Want the way a person does: what lies below Line (the row's white line, or the top of the
+    // reader a value block goes beside) and is in the way moves down, so the new nodes keep their line. Every node of
+    // the part's own region whose top is below the highest node in the way moves down by one amount, so that region keeps
+    // its shape; another region in the way moves down whole, and so does any region the moved nodes would then run into.
+    // Nothing moves (false) when something in the way reaches up to the line (a node of the row itself, or a region
+    // beside it), or is an obstacle no node owns.
+    bool PushRoomDown(const FPart& Part, const FVector2D& Want, int32 InRegion, float Line)
+    {
+        if (Part.Nodes.Num() == 0)
+        {
+            return false;
+        }
+        const TSet<int32> InPart(Part.Nodes);
+        TArray<FBox2D> PartBoxes;
+        FBox2D Extent(ForceInit);
+        for (int32 Index = 0; Index < Part.Nodes.Num(); ++Index)
+        {
+            PartBoxes.Add(BoxAt(Part.Nodes[Index], Want + Part.At[Index]));
+            Extent += PartBoxes.Last();
+        }
+        // What is in the way, as NeedDown sees it: nodes of the part's own region within NodePad of a part node, and
+        // other regions within RegionGap of the part's extent.
+        float Cut = TNumericLimits<float>::Max();
+        float Down = 0.0f;
+        bool bOwnRegion = false;
+        TSet<int32> MoveRegions;
+        for (int32 Node = 0; Node < Count; ++Node)
+        {
+            if (!IsPlaced(Node) || InPart.Contains(Node) || Region[Node] != InRegion)
+            {
+                continue;
+            }
+            const FBox2D Box = BoxAt(Node, Pos[Node]);
+            for (const FBox2D& Mine : PartBoxes)
+            {
+                if (Cross(FBox2D(Mine.Min - FVector2D(K.NodePad), Mine.Max + FVector2D(K.NodePad)), Box))
+                {
+                    if (Box.Min.Y <= Line)
+                    {
+                        return false;
+                    }
+                    bOwnRegion = true;
+                    Cut = FMath::Min(Cut, static_cast<float>(Box.Min.Y));
+                    Down = FMath::Max(Down, static_cast<float>(Mine.Max.Y + K.LaneGap - Box.Min.Y));
+                }
+            }
+        }
+        for (int32 Index = 0; Index < ObstacleAt.Num(); ++Index)
+        {
+            const int32 Owner = P.ObstacleOwner.IsValidIndex(Index) ? P.ObstacleOwner[Index] : INDEX_NONE;
+            if (Owner == INDEX_NONE && Cross(FBox2D(Extent.Min - FVector2D(K.RegionGap), Extent.Max + FVector2D(K.RegionGap)), ObstacleAt[Index]))
+            {
+                return false;
+            }
+        }
+        const FBox2D Grown(Extent.Min - FVector2D(K.RegionGap), Extent.Max + FVector2D(K.RegionGap));
+        for (const TPair<int32, FBox2D>& Other : RegionBox)
+        {
+            if (Other.Key == InRegion || !Cross(Grown, Other.Value))
+            {
+                continue;
+            }
+            if (Other.Value.Min.Y <= Line)
+            {
+                return false;
+            }
+            MoveRegions.Add(Other.Key);
+            Cut = FMath::Min(Cut, static_cast<float>(Other.Value.Min.Y));
+            Down = FMath::Max(Down, static_cast<float>(Extent.Max.Y + K.RegionGap + 1.0f - Other.Value.Min.Y));
+        }
+        if (Down <= 0.0f)
+        {
+            return false;
+        }
+        if (bOwnRegion)
+        {
+            // Everything of the own region below the cut moves, and every other region lying wholly below the cut that
+            // a moved node would come near goes with it (found below).
+            for (const TPair<int32, FBox2D>& Other : RegionBox)
+            {
+                if (Other.Key != InRegion && Other.Value.Min.Y >= Cut && Other.Value.Min.X < Extent.Max.X + K.RegionGap &&
+                    Other.Value.Max.X > Extent.Min.X - K.RegionGap)
+                {
+                    MoveRegions.Add(Other.Key);
+                }
+            }
+        }
+        const auto Moves = [&](int32 Node)
+        {
+            return !InPart.Contains(Node) && IsPlaced(Node) &&
+                   ((bOwnRegion && Region[Node] == InRegion && Pos[Node].Y >= Cut) || MoveRegions.Contains(Region[Node]));
+        };
+        // A moved node that would now come near one that stays drags that one's region along, when it lies wholly
+        // below the cut; anything else it would hit means there is no clean way to make room.
+        for (int32 Round = 0; Round < 64; ++Round)
+        {
+            int32 Hit = INDEX_NONE;
+            for (int32 Node = 0; Node < Count && Hit == INDEX_NONE; ++Node)
+            {
+                if (!Moves(Node))
+                {
+                    continue;
+                }
+                const FBox2D Before = BoxAt(Node, Pos[Node]);
+                const FBox2D After = Before.ShiftBy(FVector2D(0.0f, Down));
+                const FBox2D Near(After.Min - FVector2D(K.NodePad), After.Max + FVector2D(K.NodePad));
+                for (int32 Other = 0; Other < Count; ++Other)
+                {
+                    if (Other != Node && IsPlaced(Other) && !InPart.Contains(Other) && !Moves(Other))
+                    {
+                        const FBox2D Box = BoxAt(Other, Pos[Other]);
+                        const FBox2D WasNear(Before.Min - FVector2D(K.NodePad), Before.Max + FVector2D(K.NodePad));
+                        if (Cross(Near, Box) && !Cross(WasNear, Box))
+                        {
+                            Hit = Other;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (Hit == INDEX_NONE)
+            {
+                break;
+            }
+            const FBox2D* HitRegion = RegionBox.Find(Region[Hit]);
+            if (Region[Hit] == InRegion || !HitRegion || HitRegion->Min.Y < Cut || Round == 63)
+            {
+                return false;
+            }
+            MoveRegions.Add(Region[Hit]);
+        }
+        TSet<int32> Moved;
+        for (int32 Node = 0; Node < Count; ++Node)
+        {
+            if (Moves(Node))
+            {
+                Moved.Add(Node);
+            }
+        }
+        for (const int32 Node : Moved)
+        {
+            Pos[Node].Y += Down;
+        }
+        for (int32 Index = 0; Index < ObstacleAt.Num(); ++Index)
+        {
+            const int32 Owner = P.ObstacleOwner.IsValidIndex(Index) ? P.ObstacleOwner[Index] : INDEX_NONE;
+            if (Moved.Contains(Owner))
+            {
+                ObstacleAt[Index] = ObstacleAt[Index].ShiftBy(FVector2D(0.0f, Down));
+            }
+        }
+        for (FRowBreak& Each : Breaks)
+        {
+            if (Moved.Contains(P.Links[Each.Link].From))
+            {
+                Each.A.Y += Down;
+                Each.B.Y += Down;
+            }
+        }
+        RebuildPlaced();
+        return true;
+    }
+
+    // Puts Part's local origin at Want. With Line set (a row going on from a node, or a value beside its reader) what lies
+    // below that line and is in the way moves down first (PushRoomDown). With bSlide a row that goes on from a node then
+    // keeps its white line level by moving right, when a free spot is near enough and no other region lies between.
+    // Whatever is still in the way after that moves Part down until it touches nothing (NeedDown).
+    FVector2D PlaceBlock(const FPart& Part, FVector2D Want, bool bSlide = false, float Line = NoLine)
     {
         constexpr float SlideStep = 32.0f;
         constexpr float MaxSlide = 1600.0f;
         const int32 InRegion = Part.Nodes.Num() > 0 ? Region[Part.Nodes[0]] : INDEX_NONE;
         const float Left = Part.Nodes.Num() > 0 ? static_cast<float>(Want.X + Bounds(P, Part).Min.X) : static_cast<float>(Want.X);
+        if (Line > NoLine && InRegion != Floating && NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) > 0.0f)
+        {
+            const FSnapshot Before = Save();
+            if (PushRoomDown(Part, Want, InRegion, Line) && NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) <= 0.0f)
+            {
+                bSlide = false;
+            }
+            else
+            {
+                Restore(Before);
+            }
+        }
         for (float Slide = 0.0f; bSlide && Slide <= MaxSlide; Slide += SlideStep)
         {
             if (NeedDown(Part, Want + FVector2D(Slide, 0.0f), InRegion, Left) <= 0.0f)
@@ -434,31 +635,77 @@ private:
         const float Need = Want.X + Bounds(P, Part).Max.X + K.ExecGap - Pos[Next].X;
         if (Need > 0.0f)
         {
+            // B and what runs after it (every exec path on from B, right of A): a row of another exec output of an
+            // earlier node is no part of the insert and stays where it is.
             TSet<int32> Shift;
-            for (int32 Node = 0; Node < Count; ++Node)
+            TArray<int32> Open = {Next};
+            while (Open.Num() > 0)
             {
-                if (Done[Node] && Region[Node] == Region[From] && Pos[Node].X >= Threshold)
+                const int32 Node = Open.Pop(EAllowShrinking::No);
+                if (Shift.Contains(Node) || !IsPlaced(Node) || Region[Node] != Region[From] || Pos[Node].X < Threshold)
                 {
-                    Shift.Add(Node);
+                    continue;
+                }
+                Shift.Add(Node);
+                for (const int32 Link : Out[Node])
+                {
+                    if (P.Links[Link].bExec)
+                    {
+                        Open.Add(P.Links[Link].To);
+                    }
                 }
             }
             // A value right of A that only nodes moving read moves with them, so its wires do not stretch.
-            for (bool bGrew = true; bGrew;)
+            const auto AddValues = [this, &Shift, From]()
             {
-                bGrew = false;
-                for (int32 Node = 0; Node < Count; ++Node)
+                for (bool bGrew = true; bGrew;)
                 {
-                    if (Shift.Contains(Node) || !Done[Node] || IsExecShape(P.Shapes[Node]) || Region[Node] != Region[From] ||
-                        Pos[Node].X <= Pos[From].X || Out[Node].Num() == 0)
+                    bGrew = false;
+                    for (int32 Node = 0; Node < Count; ++Node)
+                    {
+                        if (Shift.Contains(Node) || !Done[Node] || IsExecShape(P.Shapes[Node]) || Region[Node] != Region[From] ||
+                            Pos[Node].X <= Pos[From].X || Out[Node].Num() == 0)
+                        {
+                            continue;
+                        }
+                        if (!Out[Node].ContainsByPredicate([this, &Shift](int32 Link) { return !Shift.Contains(P.Links[Link].To); }))
+                        {
+                            Shift.Add(Node);
+                            bGrew = true;
+                        }
+                    }
+                }
+            };
+            AddValues();
+            // A node that stays and that the moved ones would now run into: fall back to moving all of A's region right
+            // of A, as before, so nothing ends up on top of anything.
+            bool bClash = false;
+            for (const int32 Node : Shift)
+            {
+                const FBox2D Was = BoxAt(Node, Pos[Node]);
+                const FBox2D WasNear(Was.Min - FVector2D(K.NodePad), Was.Max + FVector2D(K.NodePad));
+                const FBox2D Near = WasNear.ShiftBy(FVector2D(Need, 0.0f));
+                for (int32 Other = 0; Other < Count && !bClash; ++Other)
+                {
+                    if (Shift.Contains(Other) || !IsPlaced(Other) || Region[Other] != Region[From])
                     {
                         continue;
                     }
-                    if (!Out[Node].ContainsByPredicate([this, &Shift](int32 Link) { return !Shift.Contains(P.Links[Link].To); }))
+                    const FBox2D Box = BoxAt(Other, Pos[Other]);
+                    bClash = Cross(Near, Box) && !Cross(WasNear, Box);
+                }
+            }
+            if (bClash)
+            {
+                Shift.Reset();
+                for (int32 Node = 0; Node < Count; ++Node)
+                {
+                    if (Done[Node] && Region[Node] == Region[From] && Pos[Node].X >= Threshold)
                     {
                         Shift.Add(Node);
-                        bGrew = true;
                     }
                 }
+                AddValues();
             }
             for (const int32 Node : Shift)
             {
@@ -641,7 +888,8 @@ private:
             Want = Left ? FVector2D(*Left, Line) : FVector2D(Pos[From.From].X + Source.Width + K.ExecGap, Line);
         }
         const bool bInsert = MakeRoom(Start, Part, Row, Want);
-        const FVector2D At = PlaceBlock(Part, Want, !bInsert && Start.Link != INDEX_NONE && !Start.bSide && !Start.bBreak);
+        const bool bKeepLine = Start.Link != INDEX_NONE && !Start.bSide && !Start.bBreak;
+        const FVector2D At = PlaceBlock(Part, Want, !bInsert && bKeepLine, bKeepLine ? static_cast<float>(Want.Y) : NoLine);
         if (Start.Link == INDEX_NONE)
         {
             NextRootY = FMath::Max(NextRootY, static_cast<float>(Bounds(P, Part).Max.Y + At.Y + K.RowGap));
@@ -695,6 +943,7 @@ private:
         Feeds(Node, FVector2D::ZeroVector, Part);
         FVector2D Want(P.Origin.X, NextRootY);
         bool bBeside = false;
+        float Line = NoLine;
         for (const int32 Link : Out[Node])
         {
             const FLink& Each = P.Links[Link];
@@ -704,10 +953,11 @@ private:
             {
                 Want = FVector2D(Pos[Each.To].X - K.DataGap - Width(Node), Pos[Each.To].Y + Reader.DataIn[Each.ToPin] - P.Shapes[Node].DataOut[Each.FromPin]);
                 bBeside = true;
+                Line = static_cast<float>(Pos[Each.To].Y);
                 break;
             }
         }
-        const FVector2D At = PlaceBlock(Part, Want);
+        const FVector2D At = PlaceBlock(Part, Want, false, Line);
         if (!bBeside)
         {
             NextRootY = FMath::Max(NextRootY, static_cast<float>(Bounds(P, Part).Max.Y + At.Y + K.RowGap));

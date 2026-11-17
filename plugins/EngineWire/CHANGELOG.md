@@ -6,6 +6,10 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 
 ## [Unreleased]
 
+### Fixed (ruled Blueprint layout, UE 5.8 fork)
+- A new chain, or a value beside its reader, keeps its white line instead of dropping below everything in its way: what lies below that line and is in the way moves down to make room (every node of the chain's own region below the highest one in the way, by one amount, so that region keeps its shape; another region in the way moves down whole, and so does any region that would then be hit). The old behaviour (slide right, then move the new nodes down) is kept only when something at the line's own level, or an obstacle no node owns, is in the way. Before, an insert into a crowded graph landed thousands of units below its row with the exec wire folding down and back up, and arranging again gave the same spot.
+- An insert between two existing nodes (A -> new -> B) moves B and what runs after it (with the values only they read), not the whole region right of A: a second exec output's row of an earlier node no longer shifts with it. The whole-region shift remains the fallback when the narrower move would put a node on another.
+
 ## [0.8.0-ue58] - 2026-11-15
 
 ### Added (ruled Blueprint layout, UE 5.8 fork)

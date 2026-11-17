@@ -215,6 +215,75 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("C's input, left of C but right of A, moves with C"), Out.Pos[5].X, 150.0 + 296.0, 1e-3);
     }
 
+    // A chain hung off an event that stays, with three lone events of their own regions under it where the chain's
+    // data goes: the chain keeps the event's white line and those events move down, in order, out of its way.
+    {
+        FProblem Ghosts;
+        Ghosts.Shapes = {Event(200.0f), Exec(200.0f, 44.0f, 1), Pure(1), Pill(), Event(200.0f), Event(200.0f), Event(200.0f)};
+        Ghosts.Links = {{0, 0, 1, 0, true}, {2, 0, 1, 0, false}, {3, 0, 2, 0, false}};
+        Ghosts.Free = {false, true, true, true, false, false, false};
+        Ghosts.Pos = {FVector2D(0.0, -144.0), FVector2D::ZeroVector, FVector2D::ZeroVector, FVector2D::ZeroVector,
+                      FVector2D(0.0, 0.0), FVector2D(0.0, 208.0), FVector2D(0.0, 416.0)};
+        const FSolution Out = McpRuled::Solve(Ghosts, Params);
+        TestEqual(TEXT("the chain keeps the event's white line"), Out.Pos[1].Y + 44.0, -144.0 + 44.0, 1e-3);
+        TestTrue(TEXT("the event it hangs off stays"), Out.Pos[0].Equals(FVector2D(0.0, -144.0)));
+        TestTrue(TEXT("the events in the way moved down"), Out.Pos[4].Y > 0.0);
+        TestEqual(TEXT("keeping their spacing"), Out.Pos[5].Y - Out.Pos[4].Y, 208.0, 1e-3);
+        TestEqual(TEXT("all three"), Out.Pos[6].Y - Out.Pos[5].Y, 208.0, 1e-3);
+        TestTrue(TEXT("and their column"), Out.Pos[4].X == 0.0 && Out.Pos[5].X == 0.0 && Out.Pos[6].X == 0.0);
+        bool bClear = true;
+        for (int32 Mine = 1; Mine < 4; ++Mine)
+        {
+            const FBox2D Box(Out.Pos[Mine], Out.Pos[Mine] + FVector2D(Ghosts.Shapes[Mine].Width, Ghosts.Shapes[Mine].Height));
+            const FBox2D Ghost(Out.Pos[4], Out.Pos[4] + FVector2D(Ghosts.Shapes[4].Width, Ghosts.Shapes[4].Height));
+            bClear &= !Box.ExpandBy(Params.RegionGap - 1.0).Intersect(Ghost);
+        }
+        TestTrue(TEXT("the chain's data keeps RegionGap from them"), bClear);
+    }
+
+    // An insert (A -> new -> B -> C) in a region where A's Sequence also runs a second row (D -> E): B and C make room,
+    // the second row stays where it is.
+    {
+        FProblem Side;
+        Side.Shapes = {Exec(176.0f, 44.0f, 0, 2), Exec(200.0f, 44.0f), Exec(200.0f, 44.0f), Exec(200.0f, 44.0f), Exec(200.0f, 44.0f),
+                       Exec(200.0f, 44.0f), Exec(200.0f, 44.0f)};
+        // 0 Sequence, 1 A, 2 B, 3 C, 4 D, 5 E, 6 new.
+        Side.Links = {{0, 0, 1, 0, true}, {0, 1, 4, 0, true}, {4, 0, 5, 0, true}, {1, 0, 6, 0, true}, {6, 0, 2, 0, true}, {2, 0, 3, 0, true}};
+        Side.Free = {false, false, false, false, false, false, true};
+        Side.Pos = {FVector2D(-300.0, 0.0), FVector2D(0.0, 0.0), FVector2D(296.0, 0.0), FVector2D(592.0, 0.0), FVector2D(0.0, 300.0),
+                    FVector2D(500.0, 300.0), FVector2D::ZeroVector};
+        const FSolution Out = McpRuled::Solve(Side, Params);
+        TestTrue(TEXT("the new node right after A, on its line"), Out.Pos[6].Equals(FVector2D(296.0, 0.0), 1e-3));
+        TestEqual(TEXT("B made room"), Out.Pos[2].X, 296.0 + 200.0 + Params.ExecGap, 1e-3);
+        TestEqual(TEXT("C with it"), Out.Pos[3].X, 592.0 + 296.0, 1e-3);
+        TestTrue(TEXT("the Sequence's second row did not move"), Out.Pos[4].Equals(FVector2D(0.0, 300.0)) && Out.Pos[5].Equals(FVector2D(500.0, 300.0)));
+    }
+
+    // An insert whose data, under the row, would land on a row of the same region just below: the new node keeps A's
+    // line and that lower row moves down instead, keeping its column.
+    {
+        FProblem Dense;
+        Dense.Shapes = {Exec(200.0f, 44.0f, 0, 2), Exec(200.0f, 44.0f), Exec(200.0f, 44.0f, 1), Pure(1), Pill(), Exec(200.0f, 44.0f)};
+        // 0 A (two exec outputs), 1 B, 2 new, 3 and 4 its data, 5 D on A's second output.
+        Dense.Links = {{0, 0, 2, 0, true}, {2, 0, 1, 0, true}, {3, 0, 2, 0, false}, {4, 0, 3, 0, false}, {0, 1, 5, 0, true}};
+        Dense.Free = {false, false, true, true, true, false};
+        Dense.Pos = {FVector2D(0.0, 0.0), FVector2D(500.0, 0.0), FVector2D::ZeroVector, FVector2D::ZeroVector, FVector2D::ZeroVector,
+                     FVector2D(100.0, 140.0)};
+        const FSolution Out = McpRuled::Solve(Dense, Params);
+        TestEqual(TEXT("the new node keeps A's line"), Out.Pos[2].Y, 0.0, 1e-3);
+        TestEqual(TEXT("right after A"), Out.Pos[2].X, 296.0, 1e-3);
+        TestTrue(TEXT("the lower row moved down"), Out.Pos[5].Y > 140.0);
+        TestEqual(TEXT("keeping its column"), Out.Pos[5].X, 100.0, 1e-3);
+        bool bClear = true;
+        const FBox2D Lower(Out.Pos[5], Out.Pos[5] + FVector2D(200.0, Dense.Shapes[5].Height));
+        for (int32 Mine = 2; Mine < 5; ++Mine)
+        {
+            const FBox2D Box(Out.Pos[Mine], Out.Pos[Mine] + FVector2D(Dense.Shapes[Mine].Width, Dense.Shapes[Mine].Height));
+            bClear &= !Box.ExpandBy(Params.NodePad - 1.0).Intersect(Lower);
+        }
+        TestTrue(TEXT("nothing of the insert overlaps it"), bClear);
+    }
+
     // Ten 300-wide nodes with rows at most 1500 wide: broken twice, each break two reroutes between the rows.
     {
         FProblem Long;
