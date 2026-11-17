@@ -19,10 +19,12 @@ class UEdGraphNode;
 //    down to the next row through two reroutes in the gap between the rows.
 //  - Each region (an event or function and everything wired to it) keeps RegionGap clear of every other region: the
 //    logic of one event never runs in among another's.
-//  - Nodes not listed stay where they are and are kept clear of: editing a graph moves only the new nodes. A new chain
-//    that goes on from a node that stays keeps its white line level, sliding right past what is in the way; one put
-//    between two nodes that stay (A -> new -> B) makes room by moving the part of A's region right of A over by as
-//    much as it needs, and nothing else.
+//  - Nodes not listed stay where they are unless they are in the way: editing a graph never moves the new nodes off
+//    their line to get round old ones. A new chain that goes on from a node that stays (or a value beside the node that
+//    reads it) keeps its white line level; what lies below that line and is in the way moves down to make room (the
+//    chain's own region below the highest node in the way by one amount, another region whole). Only when something at
+//    the line's own level is in the way does the chain slide right, or as a last resort drop below it. One put between
+//    two nodes that stay (A -> new -> B) moves B and what runs after it right by as much as it needs.
 // Solve is pure geometry; LayoutNodes (McpRuledNodes.cpp) estimates node and pin geometry and applies it.
 namespace McpRuled
 {
