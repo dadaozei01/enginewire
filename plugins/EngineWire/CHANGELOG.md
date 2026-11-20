@@ -6,6 +6,13 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 
 ## [Unreleased]
 
+### Fixed (EngineWire listeners)
+
+- Native MCP HTTP and the WebSocket bridge each require exclusive ownership of their TCP endpoint. When an endpoint is already in use, the affected listener reports the address and port and stops starting. The editor can finish initializing.
+- Windows uses `SO_EXCLUSIVEADDRUSE`. macOS and Linux use `SO_REUSEADDR` alone to support rebinding after shutdown without enabling `SO_REUSEPORT`.
+- To run two editors side by side, give each its own `Native MCP Port` (or launch with a different `MCP_NATIVE_PORT`) and its own WebSocket `Listen Ports` in the EngineWire project settings.
+- Verified on Windows UE 5.8.4 with two isolated editor projects. Both listeners rejected duplicate binds, distinct port pairs supported concurrent MCP and WebSocket handshakes, and both original ports could be rebound after the owning editor exited. macOS and Linux runtime verification is pending.
+
 ### Fixed (ruled Blueprint layout, UE 5.8 fork)
 - `arrange_nodes` keeps unlisted nodes fixed and reports `LAYOUT_COLLISION` before applying a layout if the estimated node or planned reroute boxes overlap. Batch insertion retains its existing room-making behavior.
 - Same-row continuation follows the connected exec output, including lower outputs such as Branch False. Row width is checked again after input placement expands the row.
