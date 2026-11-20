@@ -186,7 +186,15 @@ bool ArrangeNodes(FActionContext& Context)
         }
         if (bRuled)
         {
-            McpRuled::LayoutNodes(Context.TargetGraph, Listed);
+            McpRuled::FParams Params;
+            Params.bAllowMovingExisting = false;
+            FString Failure;
+            McpRuled::LayoutNodes(Context.TargetGraph, Listed, nullptr, nullptr, nullptr, Params, &Failure);
+            if (!Failure.IsEmpty())
+            {
+                Context.SendError(Failure, TEXT("LAYOUT_COLLISION"));
+                return true;
+            }
         }
         const TArray<UEdGraphNode*> Unmoved = bLayered || bRuled ? TArray<UEdGraphNode*>() : GraphBatch::SettleAutoPlacedNodes(Context.Blueprint, State);
         for (const TPair<UEdGraphNode*, FIntPoint>& Entry : Original)

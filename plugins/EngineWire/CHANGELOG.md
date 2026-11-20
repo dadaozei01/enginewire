@@ -7,6 +7,9 @@ All notable changes to the EngineWire plugin (formerly McpAutomationBridge) will
 ## [Unreleased]
 
 ### Fixed (ruled Blueprint layout, UE 5.8 fork)
+- `arrange_nodes` keeps unlisted nodes fixed and reports `LAYOUT_COLLISION` before applying a layout if the estimated node or planned reroute boxes overlap. Batch insertion retains its existing room-making behavior.
+- Same-row continuation follows the connected exec output, including lower outputs such as Branch False. Row width is checked again after input placement expands the row.
+- Verified on Windows UE 5.8.4 with the Ruled automation suite and two Blueprint graphs containing 39 and 86 nodes. Both compiled and saved, all unlisted nodes stayed fixed, and all 41 and 112 original connections matched. Full visual inspection at normal editor zoom is pending.
 - A new chain, or a value beside its reader, keeps its white line instead of dropping below everything in its way: what lies below that line and is in the way moves down to make room (every node of the chain's own region below the highest one in the way, by one amount, so that region keeps its shape; another region in the way moves down whole, and so does any region that would then be hit). The old behaviour (slide right, then move the new nodes down) is kept only when something at the line's own level, or an obstacle no node owns, is in the way. Before, an insert into a crowded graph landed thousands of units below its row with the exec wire folding down and back up, and arranging again gave the same spot.
 - An insert between two existing nodes (A -> new -> B) moves B and what runs after it (with the values only they read), not the whole region right of A: a second exec output's row of an earlier node no longer shifts with it. The whole-region shift remains the fallback when the narrower move would put a node on another.
 

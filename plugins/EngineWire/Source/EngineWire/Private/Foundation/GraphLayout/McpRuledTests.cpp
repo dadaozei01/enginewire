@@ -282,6 +282,25 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
             bClear &= !Box.ExpandBy(Params.NodePad - 1.0).Intersect(Lower);
         }
         TestTrue(TEXT("nothing of the insert overlaps it"), bClear);
+
+        McpRuled::FParams Arrange;
+        Arrange.bAllowMovingExisting = false;
+        const FSolution Fixed = McpRuled::Solve(Dense, Arrange);
+        TestTrue(TEXT("arrange keeps all unlisted nodes fixed"),
+                 Fixed.Pos[0] == Dense.Pos[0] && Fixed.Pos[1] == Dense.Pos[1] && Fixed.Pos[5] == Dense.Pos[5]);
+    }
+
+    // A connected output need not be level with its own node's input (e.g. Branch False).
+    {
+        FProblem Chain;
+        Chain.Shapes = {Event(200.0f), Exec(200.0f, 44.0f, 0, 2), Exec(200.0f, 60.0f), Exec(200.0f, 44.0f)};
+        Chain.Shapes[1].ExecOut[1] = 76.0f;
+        Chain.Links = {{0, 0, 1, 0, true}, {1, 1, 2, 0, true}, {2, 0, 3, 0, true}};
+        Chain.Free.Init(true, 4);
+        Chain.Pos.Init(FVector2D::ZeroVector, 4);
+        const FSolution Out = McpRuled::Solve(Chain, Params);
+        TestEqual(TEXT("the receiver matches the connected False pin"), Out.Pos[2].Y + 60.0, Out.Pos[1].Y + 76.0, 1e-3);
+        TestEqual(TEXT("the next edge inherits that row height"), Out.Pos[3].Y + 44.0, Out.Pos[2].Y + 60.0, 1e-3);
     }
 
     // Ten 300-wide nodes with rows at most 1500 wide: broken twice, each break two reroutes between the rows.

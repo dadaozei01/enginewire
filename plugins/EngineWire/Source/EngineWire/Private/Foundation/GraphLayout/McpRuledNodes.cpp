@@ -268,7 +268,7 @@ FShape EstimateShape(const UEdGraphNode& Node)
 }
 
 float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVector2D* Origin, TArray<UEdGraphNode*>* OutAdded,
-                  const TSet<UEdGraphNode*>* Ignore, const FParams& Params)
+                  const TSet<UEdGraphNode*>* Ignore, const FParams& Params, FString* OutFailure)
 {
     using namespace RuledNodes;
     const float NoneBottom = Origin ? static_cast<float>(Origin->Y) : 0.0f;
@@ -351,6 +351,56 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     }
     Problem.Origin = Origin ? *Origin : (Fixed.bIsValid ? FVector2D(Fixed.Min.X, Fixed.Max.Y + 200.0f) : FVector2D::ZeroVector);
     const FSolution Solution = Solve(Problem, Params);
+    if (OutFailure)
+    {
+        OutFailure->Reset();
+        TArray<FBox2D> Boxes;
+        for (int32 Node = 0; Node < Nodes.Num(); ++Node)
+        {
+            const FVector2D At(FMath::RoundToInt(Solution.Pos[Node].X), FMath::RoundToInt(Solution.Pos[Node].Y));
+            const FShape& Shape = Problem.Shapes[Node];
+            Boxes.Emplace(At, At + FVector2D(Shape.Width, Shape.Height));
+            if (!Params.bAllowMovingExisting && !Problem.Free[Node] && At != Problem.Pos[Node])
+            {
+                *OutFailure = TEXT("Layout tried to move an unlisted node.");
+                return NoneBottom;
+            }
+        }
+        const auto Overlaps = [](const FBox2D& A, const FBox2D& B)
+        {
+            return A.Min.X < B.Max.X && B.Min.X < A.Max.X && A.Min.Y < B.Max.Y && B.Min.Y < A.Max.Y;
+        };
+        for (int32 Node = 0; Node < Nodes.Num(); ++Node)
+        {
+            for (int32 Other = 0; Other < Node; ++Other)
+            {
+                if ((Problem.Free[Node] || Problem.Free[Other]) && Overlaps(Boxes[Node], Boxes[Other]))
+                {
+                    *OutFailure = FString::Printf(TEXT("Layout overlaps nodes %s and %s."),
+                        *Nodes[Node]->NodeGuid.ToString(), *Nodes[Other]->NodeGuid.ToString());
+                    return NoneBottom;
+                }
+            }
+        }
+        for (const FRowBreak& Break : Solution.Breaks)
+        {
+            for (const FVector2D& Centre : {Break.A, Break.B})
+            {
+                // MakeKnot rounds the top-left, using the same 32 by 24 footprint as ShapeAndPins.
+                const FVector2D At(FMath::RoundToInt(Centre.X - 16.0), FMath::RoundToInt(Centre.Y - 12.0));
+                const FBox2D KnotBox(At, At + FVector2D(32.0, 24.0));
+                for (const FBox2D& Box : Boxes)
+                {
+                    if (Overlaps(KnotBox, Box))
+                    {
+                        *OutFailure = TEXT("A planned reroute overlaps a node or another reroute.");
+                        return NoneBottom;
+                    }
+                }
+                Boxes.Add(KnotBox);
+            }
+        }
+    }
     float Bottom = -TNumericLimits<float>::Max();
     for (int32 Node = 0; Node < Nodes.Num(); ++Node)
     {

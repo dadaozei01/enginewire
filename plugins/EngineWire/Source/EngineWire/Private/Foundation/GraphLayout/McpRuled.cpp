@@ -564,7 +564,8 @@ private:
         constexpr float MaxSlide = 1600.0f;
         const int32 InRegion = Part.Nodes.Num() > 0 ? Region[Part.Nodes[0]] : INDEX_NONE;
         const float Left = Part.Nodes.Num() > 0 ? static_cast<float>(Want.X + Bounds(P, Part).Min.X) : static_cast<float>(Want.X);
-        if (Line > NoLine && InRegion != Floating && NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) > 0.0f)
+        if (K.bAllowMovingExisting && Line > NoLine && InRegion != Floating &&
+            NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) > 0.0f)
         {
             const FSnapshot Before = Save();
             if (PushRoomDown(Part, Want, InRegion, Line) && NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) <= 0.0f)
@@ -612,7 +613,7 @@ private:
     // as far as the chain needs, so B follows it; nothing else moves.
     bool MakeRoom(const FStart& Start, const FPart& Part, const TArray<int32>& Row, const FVector2D& Want)
     {
-        if (Start.Link == INDEX_NONE || Start.bSide || Start.bBreak || Row.Num() == 0)
+        if (!K.bAllowMovingExisting || Start.Link == INDEX_NONE || Start.bSide || Start.bBreak || Row.Num() == 0)
         {
             return false;
         }
@@ -812,7 +813,14 @@ private:
                 Break = FStart{Node, InLink, true};
                 break;
             }
-            const float Top = -ExecLine(Shape);
+            float Top = -ExecLine(Shape);
+            if (Row.Num() > 0 && InLink != INDEX_NONE)
+            {
+                const FLink& Incoming = P.Links[InLink];
+                const FShape& Source = P.Shapes[Incoming.From];
+                const float Output = Source.ExecOut.IsValidIndex(Incoming.FromPin) ? Source.ExecOut[Incoming.FromPin] : ExecLine(Source);
+                Top += static_cast<float>(Part.At[Part.Nodes.Find(Incoming.From)].Y) + Output;
+            }
             Done[Node] = true;
             Band = FMath::Max(Band, Top + Shape.Height);
             FPart Data;
@@ -842,6 +850,16 @@ private:
                         X = FMath::Max(X, static_cast<float>(Other.Max.X + K.DataGap - Box.Min.X));
                     }
                 }
+            }
+            if (Row.Num() > 0 && X + Shape.Width > K.MaxRowWidth)
+            {
+                Done[Node] = false;
+                for (int32 Value : Data.Nodes)
+                {
+                    Done[Value] = false;
+                }
+                Break = FStart{Node, InLink, true};
+                break;
             }
             Part.Add(Node, FVector2D(X, Top));
             Local.Add(BoxAt(Node, FVector2D(X, Top)));

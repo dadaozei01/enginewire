@@ -60,6 +60,8 @@ struct FRowBreak
 
 struct FParams
 {
+    /** Batch insertion may make room; arrange_nodes keeps unlisted nodes fixed. */
+    bool bAllowMovingExisting = true;
     /** Clear space between two exec nodes of a row. */
     float ExecGap = 96.0f;
     /** Clear space between a data producer and its reader. */
@@ -112,5 +114,5 @@ FShape EstimateShape(const UEdGraphNode& Node);
  *  nodes, or Origin's Y when none was placed. */
 float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVector2D* Origin = nullptr,
                   TArray<UEdGraphNode*>* OutAdded = nullptr, const TSet<UEdGraphNode*>* Ignore = nullptr,
-                  const FParams& Params = FParams());
+                  const FParams& Params = FParams(), FString* OutFailure = nullptr);
 } // namespace McpRuled
