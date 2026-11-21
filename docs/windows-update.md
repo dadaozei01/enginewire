@@ -1,14 +1,20 @@
 # Windows 更新到最新 UE 5.8 版（给 Windows 上的 Agent）
 
-## 本轮任务：v0.8.0-ue58（2026-11-15）
+## 直接安装发布包：v0.8.0-ue58
 
-本机现在应装着 v0.7.0-ue58。这一版在 `main` 上新增三块代码，都只在 Mac clang 上编译过，需要在 Windows 上用 MSVC 编译、实测并打 Win64 包：
+在 [Release Assets](https://github.com/dadaozei01/enginewire/releases/tag/v0.8.0-ue58#release-assets) 下载 `EngineWire-v0.8.0-ue58-UE5.8.4-Win64.zip` 和 `SHA256SUMS-Win64.txt`。用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 核对 ZIP 后解压，按第 4 节安装（将 `-Package` 指向解压目录）。仅安装不需要重新编译。
+
+已上架不等于已完整实测：此 Win64 ZIP 对应的源码提交及完整实测范围尚未确认。历史验证记录和后续提交上的实测不能直接归到这个 ZIP。建议先在空的 UE 5.8.4 工程确认插件加载和 MCP 连接，再用于正式工程。
+
+## 从源码重新构建或补做验证
+
+本轮需要重点验证三块功能：
 
 - Niagara 模拟控制（UPSTREAM 第 27 项）：`McpNiagaraSimControl.cpp`（新）、`McpNiagaraModuleInfo.cpp`、`McpNiagaraInfoValidate.cpp`、`McpNiagaraScratch.cpp`。
 - Niagara 对战搭建与 NDC 修复（第 28 项）：`McpNiagaraBattleSetup.cpp`（新）、`McpNiagaraParticleData.cpp`（GPU 读回经 sim cache，链接 `UNiagaraSimCacheFunctionLibrary`）、`McpNiagaraDataInterfaceConfig.cpp`、`McpPropertyReflectionImport.cpp`。
 - 蓝图规则化自动排版（第 29 项）：`Foundation/GraphLayout/McpRuled.cpp`、`McpRuledNodes.cpp`、`McpRuledTests.cpp`（新）和 `Domains/BlueprintGraph` 下几个文件。
 
-照下面“默认路径”做完 1–9 步，**本轮第 6 步打包也要做**（`-Version v0.8.0-ue58`）。v0.8.0-ue58 的 Release 已作为预发布版发出（目前只有 Mac 包）；用户明确说上传时，才把 ZIP 和校验文件传上去：`gh release upload v0.8.0-ue58 <ZIP> <SHA256SUMS-Win64.txt>`。说明正文里“Win64 包待补”那句和标题里的“(Mac)”交给用户或 Mac 端改，不要自己改。链接报 LNK1194 时，先看是不是又从 NiagaraEditor 或别的延迟加载模块导入了静态数据符号（如 `UEdGraphSchema_Niagara::PinCategory*`），按第 26 项的做法改成同值的文件内常量。
+如需重新构建或补做验证，按下面的步骤执行。如果链接报 LNK1194，先检查是否从 NiagaraEditor 或其他延迟加载模块导入了静态数据符号（如 `UEdGraphSchema_Niagara::PinCategory*`），按第 26 项的做法改用同值的文件内常量。
 
 
 ## 默认路径
@@ -31,8 +37,8 @@
 6. 第 7 步同步本机手册。
 7. 任何一项实测失败而当场修不好：回退到旧版，再报告。回退方法：请用户关闭 UE，运行
    `powershell -ExecutionPolicy Bypass -File scripts\install-enginewire.ps1 -Package "<备份路径>" -Project "<工程>.uproject"`（引擎级安装改用 `-Engine`），打开工程确认 MCP :3000。
-8. 第 6 步打包只在用户要求发版时做（本轮要做，见上面“本轮任务”）。
-9. 报告按第 8 步，尽量简洁（本轮加上 ZIP 路径与 SHA256）：编译是否通过（修了几轮、分支名、改了什么）、安装或回退结果、12 项实测逐项结果、手册同步情况。
+8. 需要生成新 ZIP 时才做第 6 步；此处仅在本地打包，不发布。
+9. 报告按第 8 步，尽量简洁（若打包，附上 ZIP 路径与 SHA-256）：编译是否通过（修了几轮、分支名、改了什么）、安装或回退结果、12 项实测逐项结果、手册同步情况。
 
 ---
 
@@ -70,7 +76,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1
 
 ## 3. MSVC 报错怎么处理
 
-UPSTREAM 第 19–25 项已在 v0.7.0-ue58 用 MSVC 编译通过（当时的修复已合入 `main`）；第 27–29 项（Niagara 模拟控制与对战搭建、蓝图规则化排版，新文件 `McpNiagaraBattleSetup.cpp`、`Foundation/GraphLayout/McpRuled*.cpp`）只在 Mac clang 上编译过。下面这些属于 clang 与 MSVC 的差异，可以做最小修改：
+UPSTREAM 第 19–25 项已在 v0.7.0-ue58 用 MSVC 编译通过（当时的修复已合入 `main`）；第 27–29 项仍应对本次构建逐项验证。下面这些属于 clang 与 MSVC 的差异，可以做最小修改：
 
 | 报错 | 原因 | 改法 |
 |---|---|---|
