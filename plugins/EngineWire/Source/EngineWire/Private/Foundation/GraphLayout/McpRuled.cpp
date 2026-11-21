@@ -155,6 +155,57 @@ public:
                 PlaceValue(Node);
             }
         }
+        // Route terminal completion down a short corridor beside its source, then along the bottom lane.
+        // Do this after floating regions settle so every point uses the final graph positions.
+        TArray<int32> Terminals = TerminalRows.Array();
+        Terminals.Sort();
+        for (const int32 Terminal : Terminals)
+        {
+            // An early-exit result may have been encountered before a loop's lower body row. Revisit it
+            // now, after every branch and value is placed, rather than routing across later rows.
+            FPart Result;
+            Result.Add(Terminal, FVector2D::ZeroVector);
+            // Carry private data inputs (not a shared source or a fixed node) with their return.
+            for (int32 Reader = 0; Reader < Result.Nodes.Num(); ++Reader)
+            {
+                for (const int32 Link : In[Result.Nodes[Reader]])
+                {
+                    const FLink& Wire = P.Links[Link];
+                    if (Wire.bExec || !IsFree(Wire.From) || IsExecShape(P.Shapes[Wire.From]) || Result.Nodes.Contains(Wire.From)) { continue; }
+                    const bool bPrivate = !Out[Wire.From].ContainsByPredicate([&](int32 Output) { return !Result.Nodes.Contains(P.Links[Output].To); });
+                    if (bPrivate) { Result.Add(Wire.From, Pos[Wire.From] - Pos[Terminal]); }
+                }
+            }
+            FVector2D Want = Pos[Terminal];
+            for (int32 Other = 0; Other < Count; ++Other)
+            {
+                if (!Result.Nodes.Contains(Other) && Region[Other] == Region[Terminal] && !TerminalRows.Contains(Other))
+                {
+                    Want.X = FMath::Max(Want.X, Pos[Other].X + P.Shapes[Other].Width + K.ExecGap);
+                    Want.Y = FMath::Max(Want.Y, Pos[Other].Y + P.Shapes[Other].Height + K.RowGap);
+                }
+            }
+            if (!Want.Equals(Pos[Terminal], 0.5))
+            {
+                PlaceBlock(Result, Want);
+            }
+            TMap<int32, FVector2D> SourceExits;
+            for (const int32 Link : In[Terminal])
+            {
+                const FLink& Wire = P.Links[Link];
+                if (!Wire.bExec) { continue; }
+                const FShape& Source = P.Shapes[Wire.From];
+                const float Output = Source.ExecOut.IsValidIndex(Wire.FromPin) ? Source.ExecOut[Wire.FromPin] : ExecLine(Source);
+                const float X = Pos[Wire.From].X + Source.Width + K.DataGap * 0.5f;
+                FRowBreak Route;
+                Route.Link = Link;
+                const FVector2D* ExistingExit = SourceExits.Find(Wire.From);
+                Route.A = ExistingExit ? *ExistingExit : FVector2D(X, Pos[Wire.From].Y + Output);
+                SourceExits.Add(Wire.From, Route.A);
+                Route.B = FVector2D(X, Pos[Terminal].Y + P.Shapes[Terminal].ExecIn);
+                Breaks.Add(Route);
+            }
+        }
         return FSolution{Pos, Breaks};
     }
 
@@ -190,6 +241,7 @@ private:
     TArray<int32> FloatingNodes;
     int32 FloatingBreaks = 0;
     TArray<FRowBreak> Breaks;
+    TSet<int32> TerminalRows;
     // For a break: the row it leaves, so the reroutes go between that row and the next.
     TMap<int32, TArray<int32>> RowOfBreak;
     TMap<int32, float> RowLeftOfBreak;
@@ -378,6 +430,7 @@ private:
         TArray<FVector2D> Pos;
         TArray<FBox2D> Obstacles;
         TArray<FRowBreak> Breaks;
+    TSet<int32> TerminalRows;
     };
     FSnapshot Save() const
     {
@@ -851,6 +904,21 @@ private:
                     }
                 }
             }
+            // Data computed from an exec node's output (loop Index, spawned Actor, ...) must follow that
+            // producer. Deep trees otherwise fit beneath the preceding column and send the fresh value leftwards.
+            for (int32 DataIndex = 0; DataIndex < Data.Nodes.Num(); ++DataIndex)
+            {
+                for (const int32 Link : In[Data.Nodes[DataIndex]])
+                {
+                    const FLink& Incoming = P.Links[Link];
+                    const int32 Producer = Part.Nodes.Find(Incoming.From);
+                    if (!Incoming.bExec && Producer != INDEX_NONE && IsExecShape(P.Shapes[Incoming.From]))
+                    {
+                        X = FMath::Max(X, static_cast<float>(Part.At[Producer].X + P.Shapes[Incoming.From].Width +
+                            K.DataGap - Data.At[DataIndex].X));
+                    }
+                }
+            }
             if (Row.Num() > 0 && X + Shape.Width > K.MaxRowWidth)
             {
                 Done[Node] = false;
@@ -904,6 +972,41 @@ private:
             const float Line = Pos[From.From].Y + (Source.ExecOut.IsValidIndex(From.FromPin) ? Source.ExecOut[From.FromPin] : ExecLine(Source));
             const float* Left = Start.bBreak ? RowLeftOfBreak.Find(Start.Link) : nullptr;
             Want = Left ? FVector2D(*Left, Line) : FVector2D(Pos[From.From].X + Source.Width + K.ExecGap, Line);
+        }
+        // A source in a fixed node or an earlier branch is not in this row's local Part. Constrain
+        // against its world position too. An explicit row break is allowed to wrap back to the left.
+        if (!Start.bBreak)
+        {
+            for (int32 PartIndex = 0; PartIndex < Part.Nodes.Num(); ++PartIndex)
+            {
+                const int32 DataNode = Part.Nodes[PartIndex];
+                if (IsExecShape(P.Shapes[DataNode])) { continue; }
+                for (const int32 Link : In[DataNode])
+                {
+                    const FLink& Incoming = P.Links[Link];
+                    if (!Incoming.bExec && Done[Incoming.From] && !Part.Nodes.Contains(Incoming.From) &&
+                        IsExecShape(P.Shapes[Incoming.From]))
+                    {
+                        Want.X = FMath::Max(Want.X, Pos[Incoming.From].X + P.Shapes[Incoming.From].Width +
+                            K.DataGap - Part.At[PartIndex].X);
+                    }
+                }
+            }
+        }
+        // A function result reached from a loop's Completed (or an early exit sharing that result) belongs
+        // after the already placed execution body. Placing it beside the loop puts its terminal back inside it.
+        const FShape& FirstShape = P.Shapes[Start.Node];
+        if (Start.bSide && FirstShape.ExecIn >= 0.0f && FirstShape.ExecOut.Num() == 0)
+        {
+            TerminalRows.Add(Start.Node);
+            for (int32 PlacedNode = 0; PlacedNode < Count; ++PlacedNode)
+            {
+                if (Done[PlacedNode] && !Part.Nodes.Contains(PlacedNode) && Region[PlacedNode] == Region[Start.Node])
+                {
+                    Want.X = FMath::Max(Want.X, Pos[PlacedNode].X + P.Shapes[PlacedNode].Width + K.ExecGap);
+                    Want.Y = FMath::Max(Want.Y, Pos[PlacedNode].Y + P.Shapes[PlacedNode].Height + K.RowGap + FirstShape.ExecIn);
+                }
+            }
         }
         const bool bInsert = MakeRoom(Start, Part, Row, Want);
         const bool bKeepLine = Start.Link != INDEX_NONE && !Start.bSide && !Start.bBreak;

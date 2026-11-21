@@ -25,7 +25,7 @@ class UEdGraphNode;
 //    chain's own region below the highest node in the way by one amount, another region whole). Only when something at
 //    the line's own level is in the way does the chain slide right, or as a last resort drop below it. One put between
 //    two nodes that stay (A -> new -> B) moves B and what runs after it right by as much as it needs.
-// Solve is pure geometry; LayoutNodes (McpRuledNodes.cpp) estimates node and pin geometry and applies it.
+// Solve is pure geometry; LayoutNodes (McpRuledNodes.cpp) measures native Slate geometry (estimates when unavailable) and applies it.
 namespace McpRuled
 {
 /** A node's estimated size and pin centres, measured down from its top edge. */
@@ -60,6 +60,9 @@ struct FRowBreak
 
 struct FParams
 {
+    /** Localize distant reads of the same self-context member variable without duplicating calculations. */
+    bool bLocalizeSharedGetters = true;
+    float MaxSharedGetSpan = 768.0f;
     /** Batch insertion may make room; arrange_nodes keeps unlisted nodes fixed. */
     bool bAllowMovingExisting = true;
     /** Clear space between two exec nodes of a row. */
@@ -105,7 +108,7 @@ struct FSolution
 
 FSolution Solve(const FProblem& Problem, const FParams& Params = FParams());
 
-/** The pin centres and size LayoutNodes assumes for Node (Slate measures the real ones when the graph is drawn). */
+/** Normal-detail native Slate pin centres and body size, with a complete estimate fallback when unavailable. */
 FShape EstimateShape(const UEdGraphNode& Node);
 
 /** Places Free in Graph by Solve; every other node stays where it is, unless an insert between two of them needs room. A block wired to nothing that stays starts at
