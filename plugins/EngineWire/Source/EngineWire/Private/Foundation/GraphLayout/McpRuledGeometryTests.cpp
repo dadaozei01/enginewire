@@ -7,7 +7,11 @@
 #include "K2Node_CallArrayFunction.h"
 #include "K2Node_GetArrayItem.h"
 #include "K2Node_ExecutionSequence.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
+#include "K2Node_Self.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet/KismetArrayLibrary.h"
 #include "NodeFactory.h"
 #include "Engine/Blueprint.h"
@@ -120,6 +124,284 @@ bool FMcpRuledGeometryTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("both execution outputs still reach the common corridor"), A.Num() == 1 && B.Num() == 1 && A[0] == B[0]);
         TestEqual(TEXT("common corridor still reaches the result"), ReturnPin->LinkedTo.Num(), 1);
     }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMcpRuledLocalizationTest, "EngineWire.Foundation.GraphLayout.Localization",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMcpRuledLocalizationTest::RunTest(const FString& Parameters)
+{
+    UBlueprint* Blueprint = FKismetEditorUtilities::CreateBlueprint(AActor::StaticClass(), GetTransientPackage(),
+        MakeUniqueObjectName(GetTransientPackage(), UBlueprint::StaticClass(), TEXT("LayoutLocalizationTest")),
+        BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+    const FEdGraphPinType DoubleType(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Double, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+    const FEdGraphPinType ActorType(UEdGraphSchema_K2::PC_Object, NAME_None, AActor::StaticClass(), EPinContainerType::None, false, FEdGraphTerminalType());
+    FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("SinkDouble"), DoubleType);
+    FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("SinkActor"), ActorType);
+
+    const auto MakeExecDelayChain = [](UEdGraph* Graph, UEdGraphPin* StartExec, int32 Steps, TArray<UEdGraphNode*>& AllNodes) -> UEdGraphPin*
+    {
+        UEdGraphPin* Tail = StartExec;
+        for (int32 Step = 0; Step < Steps; ++Step)
+        {
+            UK2Node_VariableSet* StepNode = NewObject<UK2Node_VariableSet>(Graph);
+            StepNode->CreateNewGuid();
+            StepNode->VariableReference.SetSelfMember(TEXT("SinkDouble"));
+            Graph->AddNode(StepNode, false, false);
+            StepNode->AllocateDefaultPins();
+            Tail->MakeLinkTo(StepNode->FindPin(UEdGraphSchema_K2::PN_Execute));
+            Tail = StepNode->FindPin(UEdGraphSchema_K2::PN_Then);
+            AllNodes.Add(StepNode);
+        }
+        return Tail;
+    };
+
+    // 1. Read-only function input parameter wired across > MaxSharedGetSpan spawns a local getter and compiles/executes identically.
+    {
+        UEdGraph* FuncGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("ParamLocalizeFunc"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, true, nullptr);
+        UK2Node_FunctionEntry* Entry = nullptr;
+        for (UEdGraphNode* Node : FuncGraph->Nodes)
+        {
+            Entry = Entry ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (!TestNotNull(TEXT("ParamLocalizeFunc entry exists"), Entry)) { return false; }
+        Entry->CreateUserDefinedPin(TEXT("Scale"), DoubleType, EGPD_Output);
+        UK2Node_FunctionResult* Result = NewObject<UK2Node_FunctionResult>(FuncGraph);
+        Result->CreateNewGuid();
+        FuncGraph->AddNode(Result, false, false);
+        Result->AllocateDefaultPins();
+        Result->CreateUserDefinedPin(TEXT("OutValue"), DoubleType, EGPD_Input);
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+        TArray<UEdGraphNode*> Nodes = {Entry};
+        UEdGraphPin* Tail = MakeExecDelayChain(FuncGraph, Entry->FindPin(UEdGraphSchema_K2::PN_Then), 4, Nodes);
+        Tail->MakeLinkTo(Result->FindPin(UEdGraphSchema_K2::PN_Execute));
+        Nodes.Add(Result);
+        UEdGraphPin* ScalePin = Entry->FindPin(TEXT("Scale"), EGPD_Output);
+        UEdGraphPin* OutPin = Result->FindPin(TEXT("OutValue"), EGPD_Input);
+        ScalePin->MakeLinkTo(OutPin);
+
+        McpRuled::FParams Params;
+        Params.bLocalizeSharedGetters = true;
+        const FVector2D Origin = FVector2D::ZeroVector;
+        FString Failure;
+        TArray<UEdGraphNode*> Added;
+        McpRuled::LayoutNodes(FuncGraph, Nodes, &Origin, &Added, nullptr, Params, &Failure);
+        TestTrue(*FString::Printf(TEXT("function param localization layout succeeds: %s"), *Failure), Failure.IsEmpty());
+        TestEqual(TEXT("distant function input spawns one local getter"), Added.Num(), 1);
+        const UK2Node_VariableGet* LocalGet = Added.Num() == 1 ? Cast<UK2Node_VariableGet>(Added[0]) : nullptr;
+        TestNotNull(TEXT("spawned node is a VariableGet"), LocalGet);
+        if (LocalGet)
+        {
+            TestTrue(TEXT("spawned getter is local scope"), LocalGet->VariableReference.IsLocalScope());
+            TestEqual(TEXT("spawned getter reads Scale"), LocalGet->GetVarName(), FName(TEXT("Scale")));
+            TestTrue(TEXT("spawned getter sits near Return instead of Entry"), LocalGet->NodePosX > Result->NodePosX - 400);
+            TestTrue(TEXT("OutValue is fed by the localized getter"), OutPin->LinkedTo.Num() == 1 && OutPin->LinkedTo[0]->GetOwningNode() == LocalGet);
+        }
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkipSave);
+        TestTrue(TEXT("Blueprint with localized function parameter compiles"), Blueprint->Status != BS_Error);
+        if (UFunction* Func = Blueprint->GeneratedClass ? Blueprint->GeneratedClass->FindFunctionByName(TEXT("ParamLocalizeFunc")) : nullptr)
+        {
+            struct FArgs { double Scale = 0.0; double OutValue = 0.0; };
+            FArgs Args;
+            Args.Scale = 3.5;
+            Blueprint->GeneratedClass->GetDefaultObject()->ProcessEvent(Func, &Args);
+            TestTrue(TEXT("localized function parameter preserves runtime value"), FMath::IsNearlyEqual(Args.OutValue, 3.5));
+        }
+    }
+
+    // 2. Mutated function input parameter (written by VariableSet) must NOT be localized.
+    {
+        UEdGraph* FuncGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("MutatedParamFunc"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, true, nullptr);
+        UK2Node_FunctionEntry* Entry = nullptr;
+        for (UEdGraphNode* Node : FuncGraph->Nodes)
+        {
+            Entry = Entry ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (!TestNotNull(TEXT("MutatedParamFunc entry exists"), Entry)) { return false; }
+        Entry->CreateUserDefinedPin(TEXT("Scale"), DoubleType, EGPD_Output);
+        UK2Node_FunctionResult* Result = NewObject<UK2Node_FunctionResult>(FuncGraph);
+        Result->CreateNewGuid();
+        FuncGraph->AddNode(Result, false, false);
+        Result->AllocateDefaultPins();
+        Result->CreateUserDefinedPin(TEXT("OutValue"), DoubleType, EGPD_Input);
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+        UK2Node_VariableSet* SetScale = NewObject<UK2Node_VariableSet>(FuncGraph);
+        SetScale->CreateNewGuid();
+        SetScale->VariableReference.SetLocalMember(TEXT("Scale"), FuncGraph->GetName(), FGuid());
+        FuncGraph->AddNode(SetScale, false, false);
+        SetScale->AllocateDefaultPins();
+
+        TArray<UEdGraphNode*> Nodes = {Entry, SetScale};
+        Entry->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(SetScale->FindPin(UEdGraphSchema_K2::PN_Execute));
+        UEdGraphPin* Tail = MakeExecDelayChain(FuncGraph, SetScale->FindPin(UEdGraphSchema_K2::PN_Then), 4, Nodes);
+        Tail->MakeLinkTo(Result->FindPin(UEdGraphSchema_K2::PN_Execute));
+        Nodes.Add(Result);
+        Entry->FindPin(TEXT("Scale"), EGPD_Output)->MakeLinkTo(Result->FindPin(TEXT("OutValue"), EGPD_Input));
+
+        McpRuled::FParams Params;
+        Params.bLocalizeSharedGetters = true;
+        const FVector2D Origin = FVector2D::ZeroVector;
+        FString Failure;
+        TArray<UEdGraphNode*> Added;
+        McpRuled::LayoutNodes(FuncGraph, Nodes, &Origin, &Added, nullptr, Params, &Failure);
+        TestTrue(*FString::Printf(TEXT("mutated param layout succeeds: %s"), *Failure), Failure.IsEmpty());
+        int32 AddedGetters = 0;
+        for (UEdGraphNode* Node : Added) { AddedGetters += Node && Node->IsA<UK2Node_VariableGet>() ? 1 : 0; }
+        TestEqual(TEXT("mutated function parameter is never localized"), AddedGetters, 0);
+        // Remove the intentionally uncompilable Set-on-input-param graph before compiling later cases.
+        FBlueprintEditorUtils::RemoveGraph(Blueprint, FuncGraph, EGraphRemoveFlags::None);
+    }
+
+    // 3. Read-only local variable getter is localized; mutated local variable getter is NOT localized.
+    {
+        UEdGraph* FuncGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("LocalVarLocalizeFunc"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, true, nullptr);
+        UK2Node_FunctionEntry* Entry = nullptr;
+        for (UEdGraphNode* Node : FuncGraph->Nodes)
+        {
+            Entry = Entry ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (!TestNotNull(TEXT("LocalVarLocalizeFunc entry exists"), Entry)) { return false; }
+        FBlueprintEditorUtils::AddLocalVariable(Blueprint, FuncGraph, TEXT("ConstGain"), DoubleType, TEXT("2.0"));
+        FBlueprintEditorUtils::AddLocalVariable(Blueprint, FuncGraph, TEXT("Accum"), DoubleType, TEXT("1.0"));
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+        const FGuid ConstGuid = FBlueprintEditorUtils::FindLocalVariableGuidByName(Blueprint, FuncGraph, TEXT("ConstGain"));
+        const FGuid AccumGuid = FBlueprintEditorUtils::FindLocalVariableGuidByName(Blueprint, FuncGraph, TEXT("Accum"));
+
+        UK2Node_VariableGet* GetConst = NewObject<UK2Node_VariableGet>(FuncGraph);
+        GetConst->CreateNewGuid();
+        GetConst->VariableReference.SetLocalMember(TEXT("ConstGain"), FuncGraph->GetName(), ConstGuid);
+        FuncGraph->AddNode(GetConst, false, false);
+        GetConst->AllocateDefaultPins();
+
+        UK2Node_VariableGet* GetAccum = NewObject<UK2Node_VariableGet>(FuncGraph);
+        GetAccum->CreateNewGuid();
+        GetAccum->VariableReference.SetLocalMember(TEXT("Accum"), FuncGraph->GetName(), AccumGuid);
+        FuncGraph->AddNode(GetAccum, false, false);
+        GetAccum->AllocateDefaultPins();
+
+        UK2Node_VariableSet* SetAccum = NewObject<UK2Node_VariableSet>(FuncGraph);
+        SetAccum->CreateNewGuid();
+        SetAccum->VariableReference.SetLocalMember(TEXT("Accum"), FuncGraph->GetName(), AccumGuid);
+        FuncGraph->AddNode(SetAccum, false, false);
+        SetAccum->AllocateDefaultPins();
+
+        const auto MakeSetSink = [&]() -> UK2Node_VariableSet*
+        {
+            UK2Node_VariableSet* SetSink = NewObject<UK2Node_VariableSet>(FuncGraph);
+            SetSink->CreateNewGuid();
+            SetSink->VariableReference.SetSelfMember(TEXT("SinkDouble"));
+            FuncGraph->AddNode(SetSink, false, false);
+            SetSink->AllocateDefaultPins();
+            return SetSink;
+        };
+
+        UK2Node_VariableSet* NearConst = MakeSetSink();
+        UK2Node_VariableSet* NearAccum = MakeSetSink();
+        UK2Node_VariableSet* FarConst = MakeSetSink();
+        UK2Node_VariableSet* FarAccum = MakeSetSink();
+
+        TArray<UEdGraphNode*> Nodes = {Entry, NearConst, NearAccum, SetAccum, GetConst, GetAccum};
+        Entry->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(NearConst->FindPin(UEdGraphSchema_K2::PN_Execute));
+        NearConst->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(NearAccum->FindPin(UEdGraphSchema_K2::PN_Execute));
+        NearAccum->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(SetAccum->FindPin(UEdGraphSchema_K2::PN_Execute));
+        UEdGraphPin* Tail = MakeExecDelayChain(FuncGraph, SetAccum->FindPin(UEdGraphSchema_K2::PN_Then), 4, Nodes);
+        Tail->MakeLinkTo(FarConst->FindPin(UEdGraphSchema_K2::PN_Execute));
+        FarConst->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(FarAccum->FindPin(UEdGraphSchema_K2::PN_Execute));
+        Nodes.Add(FarConst);
+        Nodes.Add(FarAccum);
+
+        GetConst->FindPin(TEXT("ConstGain"), EGPD_Output)->MakeLinkTo(NearConst->FindPin(TEXT("SinkDouble"), EGPD_Input));
+        GetConst->FindPin(TEXT("ConstGain"), EGPD_Output)->MakeLinkTo(FarConst->FindPin(TEXT("SinkDouble"), EGPD_Input));
+        GetAccum->FindPin(TEXT("Accum"), EGPD_Output)->MakeLinkTo(NearAccum->FindPin(TEXT("SinkDouble"), EGPD_Input));
+        GetAccum->FindPin(TEXT("Accum"), EGPD_Output)->MakeLinkTo(FarAccum->FindPin(TEXT("SinkDouble"), EGPD_Input));
+
+        McpRuled::FParams Params;
+        Params.bLocalizeSharedGetters = true;
+        const FVector2D Origin = FVector2D::ZeroVector;
+        FString Failure;
+        TArray<UEdGraphNode*> Added;
+        McpRuled::LayoutNodes(FuncGraph, Nodes, &Origin, &Added, nullptr, Params, &Failure);
+        TestTrue(*FString::Printf(TEXT("local variable localization layout succeeds: %s"), *Failure), Failure.IsEmpty());
+        int32 ConstCopies = 0;
+        int32 AccumCopies = 0;
+        for (UEdGraphNode* Node : Added)
+        {
+            if (const UK2Node_VariableGet* Copy = Cast<UK2Node_VariableGet>(Node))
+            {
+                ConstCopies += Copy->GetVarName() == TEXT("ConstGain") ? 1 : 0;
+                AccumCopies += Copy->GetVarName() == TEXT("Accum") ? 1 : 0;
+            }
+        }
+        TestEqual(TEXT("read-only local variable getter is localized"), ConstCopies, 1);
+        TestEqual(TEXT("mutated local variable getter is not localized"), AccumCopies, 0);
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkipSave);
+        TestTrue(TEXT("Blueprint with localized local variable compiles"), Blueprint->Status != BS_Error);
+    }
+
+    // 4. UK2Node_Self shared across distant consumers is localized cleanly.
+    {
+        UEdGraph* FuncGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("SelfLocalizeFunc"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, true, nullptr);
+        UK2Node_FunctionEntry* Entry = nullptr;
+        for (UEdGraphNode* Node : FuncGraph->Nodes)
+        {
+            Entry = Entry ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (!TestNotNull(TEXT("SelfLocalizeFunc entry exists"), Entry)) { return false; }
+
+        UK2Node_Self* SelfNode = NewObject<UK2Node_Self>(FuncGraph);
+        SelfNode->CreateNewGuid();
+        FuncGraph->AddNode(SelfNode, false, false);
+        SelfNode->AllocateDefaultPins();
+
+        const auto MakeSetActor = [&]() -> UK2Node_VariableSet*
+        {
+            UK2Node_VariableSet* SetActor = NewObject<UK2Node_VariableSet>(FuncGraph);
+            SetActor->CreateNewGuid();
+            SetActor->VariableReference.SetSelfMember(TEXT("SinkActor"));
+            FuncGraph->AddNode(SetActor, false, false);
+            SetActor->AllocateDefaultPins();
+            return SetActor;
+        };
+
+        UK2Node_VariableSet* NearSet = MakeSetActor();
+        UK2Node_VariableSet* FarSet = MakeSetActor();
+
+        TArray<UEdGraphNode*> Nodes = {Entry, NearSet, SelfNode};
+        Entry->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(NearSet->FindPin(UEdGraphSchema_K2::PN_Execute));
+        UEdGraphPin* Tail = MakeExecDelayChain(FuncGraph, NearSet->FindPin(UEdGraphSchema_K2::PN_Then), 4, Nodes);
+        Tail->MakeLinkTo(FarSet->FindPin(UEdGraphSchema_K2::PN_Execute));
+        Nodes.Add(FarSet);
+
+        UEdGraphPin* SelfOut = SelfNode->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Output);
+        SelfOut->MakeLinkTo(NearSet->FindPin(TEXT("SinkActor"), EGPD_Input));
+        SelfOut->MakeLinkTo(FarSet->FindPin(TEXT("SinkActor"), EGPD_Input));
+
+        McpRuled::FParams Params;
+        Params.bLocalizeSharedGetters = true;
+        const FVector2D Origin = FVector2D::ZeroVector;
+        FString Failure;
+        TArray<UEdGraphNode*> Added;
+        McpRuled::LayoutNodes(FuncGraph, Nodes, &Origin, &Added, nullptr, Params, &Failure);
+        TestTrue(*FString::Printf(TEXT("Self localization layout succeeds: %s"), *Failure), Failure.IsEmpty());
+        int32 SelfCopies = 0;
+        for (UEdGraphNode* Node : Added) { SelfCopies += Node && Node->GetClass() == UK2Node_Self::StaticClass() ? 1 : 0; }
+        TestEqual(TEXT("distant Self consumer receives a localized Self node"), SelfCopies, 1);
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkipSave);
+        TestTrue(TEXT("Blueprint with localized Self compiles"), Blueprint->Status != BS_Error);
+    }
+
     return true;
 }
 #endif

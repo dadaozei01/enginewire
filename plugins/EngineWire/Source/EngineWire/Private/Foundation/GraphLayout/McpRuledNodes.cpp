@@ -8,6 +8,7 @@
 #include "EdGraphSchema_K2.h"
 #include "K2Node.h"
 #include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_Knot.h"
 #include "K2Node_Self.h"
 #include "K2Node_Variable.h"
@@ -177,13 +178,9 @@ struct FMeasureContext
     }
 };
 
-// Arrange a private native widget at normal edit detail in identity geometry; cached offsets belong to an
-// earlier paint and possibly another zoom. Fall back completely if a visible pin cannot be measured.
-bool MeasureShape(const UEdGraphNode& Node, const FPins& Pins, FShape& Shape, const FMeasureContext& Context)
+// Measure a preview node widget using the caller's pin mapping (PreviewPin -> logical key).
+bool MeasurePreviewNode(UEdGraphNode* PreviewNode, const FPins& PreviewPins, FShape& Shape)
 {
-    if (!Node.IsA<UK2Node>() || Node.IsA<UK2Node_Knot>()) { return false; }
-    UEdGraphNode* const* Found = Context.Nodes.Find(&Node);
-    UEdGraphNode* PreviewNode = Found ? *Found : nullptr;
     if (!PreviewNode) { return false; }
     const TSharedPtr<SGraphNode> Widget = FNodeFactory::CreateNodeWidget(PreviewNode);
     if (!Widget.IsValid()) { return false; }
@@ -193,22 +190,21 @@ bool MeasureShape(const UEdGraphNode& Node, const FPins& Pins, FShape& Shape, co
         Size.X > 65536.0 || Size.Y > 65536.0) { return false; }
 
     TMap<const SWidget*, const UEdGraphPin*> Wanted;
-    const auto Want = [&](UEdGraphPin* Pin)
+    const auto Want = [&](UEdGraphPin* PreviewPin)
     {
-        UEdGraphPin* PreviewPin = PreviewNode->FindPinById(Pin->PinId);
         if (PreviewPin)
         {
             if (const TSharedPtr<SGraphPin> PinWidget = Widget->FindWidgetForPin(PreviewPin))
             {
-                Wanted.Add(PinWidget.Get(), Pin);
+                Wanted.Add(PinWidget.Get(), PreviewPin);
             }
         }
     };
-    if (Pins.ExecIn) { Want(Pins.ExecIn); }
-    for (UEdGraphPin* Pin : Pins.ExecOut) { Want(Pin); }
-    for (UEdGraphPin* Pin : Pins.DataIn) { Want(Pin); }
-    for (UEdGraphPin* Pin : Pins.DataOut) { Want(Pin); }
-    const int32 Expected = (Pins.ExecIn ? 1 : 0) + Pins.ExecOut.Num() + Pins.DataIn.Num() + Pins.DataOut.Num();
+    if (PreviewPins.ExecIn) { Want(PreviewPins.ExecIn); }
+    for (UEdGraphPin* Pin : PreviewPins.ExecOut) { Want(Pin); }
+    for (UEdGraphPin* Pin : PreviewPins.DataIn) { Want(Pin); }
+    for (UEdGraphPin* Pin : PreviewPins.DataOut) { Want(Pin); }
+    const int32 Expected = (PreviewPins.ExecIn ? 1 : 0) + PreviewPins.ExecOut.Num() + PreviewPins.DataIn.Num() + PreviewPins.DataOut.Num();
     if (Wanted.Num() != Expected) { return false; }
     TMap<const UEdGraphPin*, float> Centres;
     TFunction<void(const TSharedRef<SWidget>&, const FGeometry&, int32)> Visit;
@@ -237,11 +233,102 @@ bool MeasureShape(const UEdGraphNode& Node, const FPins& Pins, FShape& Shape, co
     FShape Measured;
     Measured.Width = static_cast<float>(Size.X);
     Measured.Height = static_cast<float>(Size.Y);
-    Measured.ExecIn = Pins.ExecIn ? Centres.FindChecked(Pins.ExecIn) : -1.0f;
-    for (UEdGraphPin* Pin : Pins.ExecOut) { Measured.ExecOut.Add(Centres.FindChecked(Pin)); }
-    for (UEdGraphPin* Pin : Pins.DataIn) { Measured.DataIn.Add(Centres.FindChecked(Pin)); }
-    for (UEdGraphPin* Pin : Pins.DataOut) { Measured.DataOut.Add(Centres.FindChecked(Pin)); }
+    Measured.ExecIn = PreviewPins.ExecIn ? Centres.FindChecked(PreviewPins.ExecIn) : -1.0f;
+    for (UEdGraphPin* Pin : PreviewPins.ExecOut) { Measured.ExecOut.Add(Centres.FindChecked(Pin)); }
+    for (UEdGraphPin* Pin : PreviewPins.DataIn) { Measured.DataIn.Add(Centres.FindChecked(Pin)); }
+    for (UEdGraphPin* Pin : PreviewPins.DataOut) { Measured.DataOut.Add(Centres.FindChecked(Pin)); }
     Shape = MoveTemp(Measured);
+    return true;
+}
+
+// Arrange a private native widget at normal edit detail in identity geometry; cached offsets belong to an
+// earlier paint and possibly another zoom. Fall back completely if a visible pin cannot be measured.
+bool MeasureShape(const UEdGraphNode& Node, const FPins& Pins, FShape& Shape, const FMeasureContext& Context)
+{
+    if (!Node.IsA<UK2Node>() || Node.IsA<UK2Node_Knot>()) { return false; }
+    UEdGraphNode* const* Found = Context.Nodes.Find(&Node);
+    UEdGraphNode* PreviewNode = Found ? *Found : nullptr;
+    if (!PreviewNode) { return false; }
+    FPins PreviewPins;
+    const auto MapPin = [&](UEdGraphPin* Pin) { return Pin ? PreviewNode->FindPinById(Pin->PinId) : nullptr; };
+    if (Pins.ExecIn)
+    {
+        PreviewPins.ExecIn = MapPin(Pins.ExecIn);
+        if (!PreviewPins.ExecIn) { return false; }
+    }
+    for (UEdGraphPin* Pin : Pins.ExecOut)
+    {
+        UEdGraphPin* Mapped = MapPin(Pin);
+        if (!Mapped) { return false; }
+        PreviewPins.ExecOut.Add(Mapped);
+    }
+    for (UEdGraphPin* Pin : Pins.DataIn)
+    {
+        UEdGraphPin* Mapped = MapPin(Pin);
+        if (!Mapped) { return false; }
+        PreviewPins.DataIn.Add(Mapped);
+    }
+    for (UEdGraphPin* Pin : Pins.DataOut)
+    {
+        UEdGraphPin* Mapped = MapPin(Pin);
+        if (!Mapped) { return false; }
+        PreviewPins.DataOut.Add(Mapped);
+    }
+    return MeasurePreviewNode(PreviewNode, PreviewPins, Shape);
+}
+
+// Verify a function input parameter can be read by a local UK2Node_VariableGet and measure its exact pill shape.
+bool MeasureLocalParamShape(const UEdGraph* Graph, const FMeasureContext& Context, const FName ParamName,
+                            const FEdGraphPinType& ExpectedType, FShape& OutShape)
+{
+    const UBlueprint* Blueprint = Graph ? FBlueprintEditorUtils::FindBlueprintForGraph(Graph) : nullptr;
+    UClass* OwningClass = Blueprint
+        ? (Blueprint->SkeletonGeneratedClass ? *Blueprint->SkeletonGeneratedClass : *Blueprint->GeneratedClass)
+        : nullptr;
+    if (!OwningClass) { return false; }
+    FMemberReference Ref;
+    Ref.SetLocalMember(ParamName, Graph->GetName(), FGuid());
+    const FProperty* Property = Ref.ResolveMember<FProperty>(OwningClass);
+    if (!Property || !Property->HasAnyPropertyFlags(CPF_Parm) ||
+        Property->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm | CPF_ReferenceParm) ||
+        Property->HasMetaData(TEXT("BlueprintGetter")))
+    {
+        return false;
+    }
+    FEdGraphPinType ResolvedType;
+    if (!GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(Property, ResolvedType) || ResolvedType != ExpectedType)
+    {
+        return false;
+    }
+    if (Context.Preview.IsValid() && Context.Preview->UbergraphPages.Num() > 0)
+    {
+        UEdGraph* PreviewGraph = Context.Preview->UbergraphPages[0];
+        UK2Node_VariableGet* PreviewGetter = NewObject<UK2Node_VariableGet>(PreviewGraph);
+        PreviewGetter->CreateNewGuid();
+        PreviewGetter->VariableReference.SetLocalMember(ParamName, Graph->GetName(), FGuid());
+        PreviewGraph->Nodes.Add(PreviewGetter);
+        PreviewGetter->AllocateDefaultPins();
+        UEdGraphPin* ValuePin = PreviewGetter->FindPin(ParamName, EGPD_Output);
+        if (!ValuePin || ValuePin->PinType != ExpectedType)
+        {
+            return false;
+        }
+        FPins PreviewPins;
+        CollectPins(*PreviewGetter, PreviewPins);
+        if (PreviewPins.ExecIn || PreviewPins.ExecOut.Num() > 0 || PreviewPins.DataIn.Num() > 0 || PreviewPins.DataOut.Num() != 1)
+        {
+            return false;
+        }
+        if (MeasurePreviewNode(PreviewGetter, PreviewPins, OutShape))
+        {
+            return true;
+        }
+    }
+    OutShape = FShape();
+    OutShape.Width = FMath::Max(80.0f, TextWidth(ParamName.ToString()) + 56.0f);
+    OutShape.Height = PillHeight;
+    OutShape.ExecIn = -1.0f;
+    OutShape.DataOut.Add(PillHeight * 0.5f);
     return true;
 }
 
@@ -463,48 +550,46 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     }
     Problem.Origin = Origin ? *Origin : (Fixed.bIsValid ? FVector2D(Fixed.Min.X, Fixed.Max.Y + 200.0f) : FVector2D::ZeroVector);
     FSolution Solution = Solve(Problem, Params);
+    enum class ECopyKind : uint8
+    {
+        DuplicateNode,
+        FunctionParam
+    };
     struct FGetterCopy
     {
+        ECopyKind Kind = ECopyKind::DuplicateNode;
         int32 Source = INDEX_NONE;
+        int32 SourcePin = 0;
+        FName ParamName = NAME_None;
         int32 Copy = INDEX_NONE;
         FVector2D Reader = FVector2D::ZeroVector;
         TArray<int32> Links;
     };
     TArray<FGetterCopy> GetterCopies;
     // Plan copies in the geometry model first. Do not change the graph until the full layout validates.
-    // Only pure, self-context member reads qualify: never copy an exec output, a calculation, a local
-    // variable with a different scope, or a getter bound to another target object.
+    // Only pure, zero-side-effect reads qualify: self-context member variables, Self, read-only local
+    // variables in the same scope, and read-only function input parameters. Never copy calculations,
+    // exec outputs, mutated locals/params, by-ref inputs, or getters bound to another target object.
     const int32 OriginalNodes = Nodes.Num();
     if (Params.bLocalizeSharedGetters)
     {
-        for (int32 Source = 0; Source < OriginalNodes; ++Source)
+        TSet<FName> MutatedLocals;
+        for (UEdGraphNode* GraphNode : Graph->Nodes)
         {
-            const UK2Node_VariableGet* Getter = Cast<UK2Node_VariableGet>(Nodes[Source]);
-            if (!Getter || Getter->GetClass() != UK2Node_VariableGet::StaticClass() || !Getter->VariableReference.IsSelfContext() || Getter->VariableReference.IsLocalScope() ||
-                Pins[Source].ExecIn || Pins[Source].ExecOut.Num() > 0) { continue; }
-            const FProperty* Property = Getter->GetPropertyForVariable();
-            if (!Property || Property->HasMetaData(TEXT("BlueprintGetter"))) { continue; }
-            bool bHasTarget = false;
-            for (UEdGraphPin* Input : Getter->Pins)
+            if (const UK2Node_VariableSet* Setter = Cast<UK2Node_VariableSet>(GraphNode))
             {
-                if (Input->Direction == EGPD_Input)
+                if (Setter->VariableReference.IsLocalScope())
                 {
-                    bHasTarget |= Input->LinkedTo.Num() > 0 || Input->DefaultObject != nullptr;
+                    MutatedLocals.Add(Setter->GetVarName());
                 }
             }
-            if (bHasTarget) { continue; }
-            TArray<int32> Readers;
-            int32 Keep = INDEX_NONE;
-            double Nearest = TNumericLimits<double>::Max();
-            for (int32 Link = 0; Link < Problem.Links.Num(); ++Link)
-            {
-                const FLink& Wire = Problem.Links[Link];
-                if (Wire.bExec || Wire.From != Source) { continue; }
-                Readers.Add(Link);
-                const double Distance = (Solution.Pos[Wire.To] - Solution.Pos[Source]).SizeSquared();
-                if (Distance < Nearest) { Nearest = Distance; Keep = Link; }
-            }
-            if (Readers.Num() < 2) { continue; }
+        }
+        const UEdGraph* TopGraph = FBlueprintEditorUtils::GetTopLevelGraph(Graph);
+        const FString TopGraphName = TopGraph ? TopGraph->GetName() : FString();
+        const auto PlanReaders = [&](const ECopyKind Kind, const int32 Source, const int32 SourcePin,
+                                     const FName ParamName, const TArray<int32>& Readers, const int32 Keep,
+                                     const FShape& CopyShape)
+        {
             for (const int32 Link : Readers)
             {
                 FLink& Wire = Problem.Links[Link];
@@ -516,7 +601,8 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
                 for (int32 Candidate = 0; Candidate < GetterCopies.Num(); ++Candidate)
                 {
                     const FGetterCopy& Copy = GetterCopies[Candidate];
-                    if (Copy.Source == Source && FMath::Abs(Copy.Reader.X - Reader.X) <= Params.DataGap * 6.0f &&
+                    if (Copy.Kind == Kind && Copy.Source == Source && Copy.SourcePin == SourcePin &&
+                        FMath::Abs(Copy.Reader.X - Reader.X) <= Params.DataGap * 6.0f &&
                         FMath::Abs(Copy.Reader.Y - Reader.Y) <= Params.InputGap * 12.0f)
                     { Group = Candidate; break; }
                 }
@@ -524,23 +610,109 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
                 {
                     Group = GetterCopies.AddDefaulted();
                     FGetterCopy& Copy = GetterCopies[Group];
+                    Copy.Kind = Kind;
                     Copy.Source = Source;
+                    Copy.SourcePin = SourcePin;
+                    Copy.ParamName = ParamName;
                     Copy.Copy = Nodes.Num();
                     Copy.Reader = Reader;
                     // Source pointers are placeholders until validation succeeds; no source node is moved here.
                     UEdGraphNode* SourceNode = Nodes[Source];
                     Nodes.Add(SourceNode);
-                    FPins SourcePins = Pins[Source];
-                    Pins.Add(MoveTemp(SourcePins));
-                    const FShape Shape = Problem.Shapes[Source];
-                    Problem.Shapes.Add(Shape);
+                    Pins.AddDefaulted();
+                    Problem.Shapes.Add(CopyShape);
                     Problem.Free.Add(true);
                     const FVector2D SourcePos = Problem.Pos[Source];
                     Problem.Pos.Add(SourcePos);
                 }
                 GetterCopies[Group].Links.Add(Link);
                 Wire.From = GetterCopies[Group].Copy;
+                Wire.FromPin = 0;
             }
+        };
+
+        for (int32 Source = 0; Source < OriginalNodes; ++Source)
+        {
+            UEdGraphNode* SourceNode = Nodes[Source];
+            if (SourceNode->GetClass() == UK2Node_FunctionEntry::StaticClass())
+            {
+                if (TopGraph != Graph) { continue; }
+                for (int32 PinAt = 0; PinAt < Pins[Source].DataOut.Num(); ++PinAt)
+                {
+                    UEdGraphPin* ParamPin = Pins[Source].DataOut[PinAt];
+                    if (!ParamPin || ParamPin->ParentPin || ParamPin->SubPins.Num() > 0 ||
+                        ParamPin->PinType.bIsReference || MutatedLocals.Contains(ParamPin->PinName))
+                    {
+                        continue;
+                    }
+                    TArray<int32> Readers;
+                    bool bHasByRefReader = false;
+                    bool bAnyDistant = false;
+                    for (int32 Link = 0; Link < Problem.Links.Num(); ++Link)
+                    {
+                        const FLink& Wire = Problem.Links[Link];
+                        if (Wire.bExec || Wire.From != Source || Wire.FromPin != PinAt) { continue; }
+                        if (Wires[Link].Value && Wires[Link].Value->PinType.bIsReference) { bHasByRefReader = true; break; }
+                        Readers.Add(Link);
+                        if (Problem.Free[Wire.To])
+                        {
+                            const FVector2D Span = Solution.Pos[Wire.To] - Solution.Pos[Source];
+                            bAnyDistant |= FMath::Abs(Span.X) >= Params.MaxSharedGetSpan || FMath::Abs(Span.Y) >= Params.RowGap * 3.0f;
+                        }
+                    }
+                    if (bHasByRefReader || !bAnyDistant || Readers.Num() == 0) { continue; }
+                    FShape ParamShape;
+                    if (!MeasureLocalParamShape(Graph, Context, ParamPin->PinName, ParamPin->PinType, ParamShape)) { continue; }
+                    PlanReaders(ECopyKind::FunctionParam, Source, PinAt, ParamPin->PinName, Readers, INDEX_NONE, ParamShape);
+                }
+                continue;
+            }
+
+            const bool bSelfNode = SourceNode->GetClass() == UK2Node_Self::StaticClass();
+            const UK2Node_VariableGet* Getter = Cast<UK2Node_VariableGet>(SourceNode);
+            const bool bGetterNode = Getter && Getter->GetClass() == UK2Node_VariableGet::StaticClass();
+            if ((!bSelfNode && !bGetterNode) || Pins[Source].ExecIn || Pins[Source].ExecOut.Num() > 0 ||
+                Pins[Source].DataOut.Num() != 1 || Pins[Source].DataOut[0]->ParentPin || Pins[Source].DataOut[0]->SubPins.Num() > 0)
+            {
+                continue;
+            }
+            bool bCheckByRefReaders = false;
+            if (bGetterNode)
+            {
+                const bool bSelfMember = Getter->VariableReference.IsSelfContext() && !Getter->VariableReference.IsLocalScope();
+                const bool bReadOnlyLocal = Getter->VariableReference.IsLocalScope() &&
+                    !TopGraphName.IsEmpty() && Getter->VariableReference.GetMemberScopeName() == TopGraphName &&
+                    !MutatedLocals.Contains(Getter->GetVarName());
+                if (!bSelfMember && !bReadOnlyLocal) { continue; }
+                const FProperty* Property = Getter->GetPropertyForVariable();
+                if (!Property || Property->HasMetaData(TEXT("BlueprintGetter"))) { continue; }
+                bool bHasTarget = false;
+                for (UEdGraphPin* Input : Getter->Pins)
+                {
+                    if (Input->Direction == EGPD_Input)
+                    {
+                        bHasTarget |= Input->LinkedTo.Num() > 0 || Input->DefaultObject != nullptr;
+                    }
+                }
+                if (bHasTarget) { continue; }
+                bCheckByRefReaders = bReadOnlyLocal;
+            }
+            TArray<int32> Readers;
+            int32 Keep = INDEX_NONE;
+            double Nearest = TNumericLimits<double>::Max();
+            bool bHasByRefReader = false;
+            for (int32 Link = 0; Link < Problem.Links.Num(); ++Link)
+            {
+                const FLink& Wire = Problem.Links[Link];
+                if (Wire.bExec || Wire.From != Source) { continue; }
+                if (bCheckByRefReaders && Wires[Link].Value && Wires[Link].Value->PinType.bIsReference) { bHasByRefReader = true; break; }
+                Readers.Add(Link);
+                const double Distance = (Solution.Pos[Wire.To] - Solution.Pos[Source]).SizeSquared();
+                if (Distance < Nearest) { Nearest = Distance; Keep = Link; }
+            }
+            if (bHasByRefReader || Readers.Num() < 2) { continue; }
+            const FShape SourceShape = Problem.Shapes[Source];
+            PlanReaders(ECopyKind::DuplicateNode, Source, 0, NAME_None, Readers, Keep, SourceShape);
         }
         if (GetterCopies.Num() > 0) { Solution = Solve(Problem, Params); }
     }
@@ -607,19 +779,33 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
             }
         }
     }
-    // Commit the validated same-variable copies and rewire only their planned consumers. DuplicateObject
+    // Commit the validated localized copies and rewire only their planned consumers. DuplicateObject
     // preserves the exact FMemberReference and pin types/defaults. Clear cloned link arrays directly:
     // BreakAllNodeLinks on a fresh duplicate could otherwise touch the original neighbours.
     if (GetterCopies.Num() > 0) { Graph->Modify(); }
     for (const FGetterCopy& Plan : GetterCopies)
     {
-        UK2Node_VariableGet* Source = CastChecked<UK2Node_VariableGet>(Nodes[Plan.Source]);
+        UK2Node* Source = CastChecked<UK2Node>(Nodes[Plan.Source]);
         Source->Modify();
-        UK2Node_VariableGet* Copy = DuplicateObject<UK2Node_VariableGet>(Source, Graph, MakeUniqueObjectName(Graph, Source->GetClass(), Source->GetFName()));
-        Copy->SetFlags(RF_Transactional);
-        Copy->CreateNewGuid();
-        for (UEdGraphPin* Pin : Copy->Pins) { Pin->LinkedTo.Reset(); Pin->PinId = FGuid::NewGuid(); }
-        Graph->AddNode(Copy, false, false);
+        UK2Node* Copy = nullptr;
+        if (Plan.Kind == ECopyKind::DuplicateNode)
+        {
+            Copy = DuplicateObject<UK2Node>(Source, Graph, MakeUniqueObjectName(Graph, Source->GetClass(), Source->GetFName()));
+            Copy->SetFlags(RF_Transactional);
+            Copy->CreateNewGuid();
+            for (UEdGraphPin* Pin : Copy->Pins) { Pin->LinkedTo.Reset(); Pin->PinId = FGuid::NewGuid(); }
+            Graph->AddNode(Copy, false, false);
+        }
+        else
+        {
+            UK2Node_VariableGet* ParamGetter = NewObject<UK2Node_VariableGet>(Graph, MakeUniqueObjectName(Graph, UK2Node_VariableGet::StaticClass(), TEXT("K2Node_VariableGet")));
+            ParamGetter->SetFlags(RF_Transactional);
+            ParamGetter->CreateNewGuid();
+            ParamGetter->VariableReference.SetLocalMember(Plan.ParamName, Graph->GetName(), FGuid());
+            Graph->AddNode(ParamGetter, false, false);
+            ParamGetter->AllocateDefaultPins();
+            Copy = ParamGetter;
+        }
         Nodes[Plan.Copy] = Copy;
         Pins[Plan.Copy] = FPins();
         CollectPins(*Copy, Pins[Plan.Copy]);
