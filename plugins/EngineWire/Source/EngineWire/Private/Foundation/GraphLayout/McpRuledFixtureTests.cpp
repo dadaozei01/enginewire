@@ -9,7 +9,10 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphNode_Comment.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_Knot.h"
+#include "K2Node_Self.h"
 #include "K2Node_VariableGet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -26,9 +29,14 @@
 
 namespace McpRuledFixture
 {
-// Equivalent self-member getters are the same value source; original node identities are checked separately.
+// Equivalent self-member getters, Self nodes, and read-only local getters are the same value source;
+// original node identities are checked separately.
 FString SourceId(const UEdGraphNode* Node)
 {
+    if (Node && Node->GetClass() == UK2Node_Self::StaticClass())
+    {
+        return TEXT("self");
+    }
     if (const UK2Node_VariableGet* Getter = Cast<UK2Node_VariableGet>(Node))
     {
         if (Getter->VariableReference.IsSelfContext() && !Getter->VariableReference.IsLocalScope())
@@ -36,6 +44,40 @@ FString SourceId(const UEdGraphNode* Node)
             FString Reference;
             FMemberReference::StaticStruct()->ExportText(Reference, &Getter->VariableReference, nullptr, nullptr, PPF_None, nullptr);
             return TEXT("self-get:") + Reference;
+        }
+        if (Getter->VariableReference.IsLocalScope())
+        {
+            FString Reference;
+            FMemberReference::StaticStruct()->ExportText(Reference, &Getter->VariableReference, nullptr, nullptr, PPF_None, nullptr);
+            return TEXT("local-get:") + Reference;
+        }
+    }
+    if (const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+    {
+        const UFunction* Function = Call->GetClass() == UK2Node_CallFunction::StaticClass() && Call->IsNodePure()
+            ? Call->GetTargetFunction()
+            : nullptr;
+        if (Function && !Call->IsLatentFunction() &&
+            Function->HasAllFunctionFlags(FUNC_Native | FUNC_Const) &&
+            !Function->HasAnyFunctionFlags(FUNC_Static | FUNC_Event | FUNC_BlueprintEvent | FUNC_Net))
+        {
+            UEdGraphPin* SelfPin = nullptr;
+            bool bExtra = false;
+            for (UEdGraphPin* Pin : Call->Pins)
+            {
+                if (Pin->Direction != EGPD_Input) { continue; }
+                if (Pin->PinName == UEdGraphSchema_K2::PN_Self) { SelfPin = Pin; continue; }
+                if (!Pin->bHidden || Pin->LinkedTo.Num() > 0) { bExtra = true; break; }
+            }
+            if (!bExtra)
+            {
+                FString TargetId = TEXT("self");
+                if (SelfPin && SelfPin->LinkedTo.Num() == 1 && SelfPin->LinkedTo[0])
+                {
+                    TargetId = SourceId(SelfPin->LinkedTo[0]->GetOwningNode()) + TEXT(".") + SelfPin->LinkedTo[0]->PinName.ToString();
+                }
+                return TEXT("const-get:") + Function->GetPathName() + TEXT("(") + TargetId + TEXT(")");
+            }
         }
     }
     return Node->NodeGuid.ToString();
@@ -53,10 +95,39 @@ void Endpoints(UEdGraphPin* Pin, TSet<const UEdGraphPin*>& Seen, TArray<FString>
 }
 TArray<FString> Meaning(UEdGraph* Graph)
 {
+    const UK2Node_FunctionEntry* Entry = nullptr;
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (const UK2Node_FunctionEntry* Candidate = Cast<UK2Node_FunctionEntry>(Node))
+        {
+            Entry = Candidate;
+            break;
+        }
+    }
     TArray<FString> Rows;
     for (UEdGraphNode* Node : Graph->Nodes)
     {
         if (!Node || Node->IsA<UK2Node_Knot>()) { continue; }
+        // A local getter reading a function entry input parameter is semantically identical to wiring from Entry.
+        if (Entry)
+        {
+            if (const UK2Node_VariableGet* Getter = Cast<UK2Node_VariableGet>(Node))
+            {
+                if (Getter->VariableReference.IsLocalScope() && Entry->FindPin(Getter->GetVarName(), EGPD_Output))
+                {
+                    if (UEdGraphPin* OutPin = Getter->FindPin(Getter->GetVarName(), EGPD_Output))
+                    {
+                        TSet<const UEdGraphPin*> Seen;
+                        TArray<FString> Targets;
+                        for (UEdGraphPin* Target : OutPin->LinkedTo) { Endpoints(Target, Seen, Targets); }
+                        Targets.Sort();
+                        const FString EntryId = SourceId(Entry);
+                        for (const FString& Target : Targets) { Rows.AddUnique(EntryId + TEXT(".") + OutPin->PinName.ToString() + TEXT("->") + Target); }
+                    }
+                    continue;
+                }
+            }
+        }
         const FString Id = SourceId(Node);
         Rows.AddUnique(Id + TEXT(":") + Node->GetClass()->GetPathName() + TEXT(":") + Node->NodeComment);
         for (UEdGraphPin* Pin : Node->Pins)

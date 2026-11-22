@@ -60,7 +60,7 @@ struct FRowBreak
 
 struct FParams
 {
-    /** Localize distant reads of the same self-context member variable without duplicating calculations. */
+    /** Localize distant reads of zero-side-effect sources (self-context members, Self, read-only locals/function inputs, and zero-arg native const pure getters) without duplicating calculations. */
     bool bLocalizeSharedGetters = true;
     float MaxSharedGetSpan = 768.0f;
     /** Batch insertion may make room; arrange_nodes keeps unlisted nodes fixed. */
