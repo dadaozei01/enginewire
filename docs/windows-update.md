@@ -1,21 +1,27 @@
 # Windows 更新到最新 UE 5.8 版（给 Windows 上的 Agent）
 
-## 本轮交接：蓝图排版修复（2026-11-22）
+## 本轮交接：蓝图排版与写入修复（2026-11-22，含 PR #13 / #15 / #16）
 
-用户要求在公司 Windows 电脑更新插件。**本轮走源码构建路径，不直接安装下面的旧 Release ZIP。** 排版修复 `9fa676273130494058b0749f37baffd3f4f5c3a7` 已通过 [PR #13](https://github.com/dadaozei01/enginewire/pull/13) 合入 `main`，合并提交为 `3e0efd7c8dfc222fdede86b20db61f3515c85754`。现有 v0.8.0 Release ZIP 是否包含该修复尚未确认。
+用户要求在公司 Windows 电脑更新插件。**本轮走源码构建路径，不直接安装下面的旧 Release ZIP。** 最新修复已全部合入 `main`：
+
+- [PR #13](https://github.com/dadaozei01/enginewire/pull/13)（合并提交 `3e0efd7c8dfc222fdede86b20db61f3515c85754`，含 `9fa676273130494058b0749f37baffd3f4f5c3a7`）：真实 Slate 节点尺寸与引脚位置、执行流对齐、Return/Completed 回线走廊、普通成员变量 Get 就近复制。
+- [PR #15](https://github.com/dadaozei01/enginewire/pull/15)（合并提交 `1b2e06fa649242bfc54b5b2248d050614c1c322d`，含 `80afdf645d2e29db697e03ea09926d7696995b3a`）：`write_graph_from_code` 多 Form 未排版节点隔离、按场景区分 `bAllowMovingExisting`、以及 `FTranspiler::Connect` 自动转换节点（如 `Conv_IntToDouble`）追踪。
+- [PR #16](https://github.com/dadaozei01/enginewire/pull/16)（合并提交 `d748389d41d50584ff795b95756c3bbf3cb166b0`，含 `bae493aa6dbb5f8d76eff0a3392fbe0bdbf3ba7d`、`d989a14ba37ef2aef06d4d42b257da90102366e9`、`72af6d71b726eb3ed4b3558e4cfa55c345110bc8`）：深层纯 DAG 排版优化（列松弛消除反向纯数据线、2D 装箱、入口左侧边界钳制）以及扩展远距离零副作用读取就近复制（`UK2Node_Self`、同作用域只读局部变量、只读函数输入参数、无额外参数的原生 `const` 纯成员 Getter 连同简单 `Target` 读取节点一起复制）。
+
+现有 v0.8.0 Release ZIP 不包含以上修复，本轮不采用。
 
 给公司 Codex 的执行要求（用户最新要求：只更新、编译、替换，不做功能验证）：
 
 - 按第 0–4 节执行：确认本机 UE 5.8.4、目标工程、编辑器状态和现有安装层级，拉取最新 `main`，完整编译 Win64，备份旧插件后替换。不要沿用 Mac 工程路径或假定本机插件版本。
-- 源码应包含 `9fa676273130494058b0749f37baffd3f4f5c3a7`；记录实际构建的 `git rev-parse HEAD`。不要切回历史修复分支，也不要使用无法确认包含本轮修复的旧 Release ZIP。
+- 源码应至少包含 `d748389d41d50584ff795b95756c3bbf3cb166b0`（即包含 PR #13、#15、#16 全部提交）；记录实际构建的 `git rev-parse HEAD`。不要切回历史修复分支，也不要使用旧 Release ZIP。
 - **本轮跳过第 5 节全部 MCP、Niagara、PIE、自动化及视觉回归，不新建测试资产，不对用户蓝图重新排版。** 保留安装脚本自带的备份、DLL 哈希与目录检查。
-- 本轮新增真实 Slate 节点尺寸与引脚位置、执行流对齐、Return/Completed 回线走廊、普通成员变量 Get 就近复制；事件图与函数内部共用这些修复。Mac UE 5.8.4 Universal 构建及排版回归已通过；Windows 本轮仅报告实际编译和安装结果，不宣称功能验证通过。
-- MSVC 编译兼容性修复分支用 `fix/win-msvc-layout-20261122`（已存在则检查后使用或加唯一后缀），替代旧示例 `fix/win-msvc-v080`。修复可推送该分支，不自动合并主线。
+- Mac UE 5.8.4 Universal 构建及 7 项无头自动化回归（`Decompile`、`Parse`、`WriteLayout`、`Geometry`、`Layered`、`Localization`、`Ruled`）已全部通过；Windows 本轮仅报告实际编译和安装结果，不宣称功能验证通过。
+- MSVC 编译兼容性修复分支用 `fix/win-msvc-layout-20261122-v2`（已存在则检查后使用或加唯一后缀），替代旧示例 `fix/win-msvc-v080`。修复可推送该分支，不自动合并主线。
 - 本轮跳过第 6–7 节打包和手册同步，不发布 Release，不额外改客户端配置。最终只报告源码 SHA、编译结果、安装位置与备份路径；编译失败不替换旧插件。
 
 可直接给公司 Codex：
 
-> 请按 main 分支 docs/windows-update.md 的“本轮交接”更新这台电脑的 EngineWire：拉取最新 main（包含 9fa6762），编译 UE 5.8.4 Win64，备份并替换本机目标工程现有插件。先确认工程、引擎和安装层级；需要关闭编辑器时让我保存关闭。不做功能测试、自动化、PIE、截图或蓝图排版，不新建测试资产；保留安装脚本的备份与文件检查。编译失败不安装。最后报告源码 SHA、编译结果、安装位置和备份路径，不发布 Release。
+> 请按 https://github.com/dadaozei01/enginewire/blob/main/docs/windows-update.md 的“本轮交接”拉取最新 main（至少包含 d748389），编译 UE 5.8.4 Win64，备份并替换本机现有 EngineWire 插件，先确认工程、引擎和安装层级，需要关闭编辑器时让我保存关闭。不做功能测试、自动化、PIE、截图或蓝图排版，不新建测试资产；保留安装脚本的备份与文件检查。编译失败保留旧插件，完成后报告源码 SHA、编译结果、安装位置和备份路径，不发布 Release。
 
 ## 直接安装发布包：v0.8.0-ue58（历史包，本轮不采用）
 
