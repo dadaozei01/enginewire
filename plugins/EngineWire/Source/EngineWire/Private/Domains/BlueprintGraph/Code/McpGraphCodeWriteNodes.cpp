@@ -226,7 +226,26 @@ UEdGraphNode* FTranspiler::Create(const FString& TypeId)
 
 bool FTranspiler::Connect(UEdGraphPin* Out, UEdGraphPin* In)
 {
-    if (Out && In && Graph->GetSchema()->TryCreateConnection(Out, In))
+    TSet<UEdGraphNode*> Before;
+    Before.Reserve(Graph->Nodes.Num());
+    for (UEdGraphNode* Existing : Graph->Nodes)
+    {
+        if (Existing)
+        {
+            Before.Add(Existing);
+        }
+    }
+    const bool bConnected = Out && In && Graph->GetSchema()->TryCreateConnection(Out, In);
+    // Schema auto-conversion (e.g. int -> double) spawns intermediate nodes at (0, 0). Record any newly added
+    // nodes on both success and failure so layout, node counts, and compiler-message line attribution include them.
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (Node && !Before.Contains(Node))
+        {
+            Made.Add(Node, Line);
+        }
+    }
+    if (bConnected)
     {
         return true;
     }
