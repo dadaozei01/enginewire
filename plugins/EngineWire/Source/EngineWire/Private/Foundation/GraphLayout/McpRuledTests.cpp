@@ -393,6 +393,74 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
                 Out.Pos[5].Y >= Out.Pos[Other].Y + Early.Shapes[Other].Height + Params.RowGap - 1.0f);
         }
     }
+    // Pure DAG: a shared pure producer read at two different depths sits to the left of BOTH readers
+    // (no backward pure-to-pure wire), and nothing overhangs left of the fixed entry node.
+    {
+        FProblem PureDag;
+        // 0: Fixed FunctionEntry at (0, 0)
+        // 1: ReturnNode (2 data inputs: 0 = shallow consumer, 1 = deeper chain)
+        // 2: Shallow consumer (depth 1 from Return) reading shared node 5
+        // 3: Deep outer consumer (depth 1 from Return) reading node 4
+        // 4: Deep inner consumer (depth 2 from Return) reading shared node 5
+        // 5: Shared pure producer (read by both 2 and 4)
+        // 6: Variable pill feeding shared node 5
+        FShape Return = Exec(180.0f, 44.0f, 2, 0);
+        PureDag.Shapes = {Event(180.0f), Return, Pure(1), Pure(1), Pure(1), Pure(1), Pill()};
+        PureDag.Links = {
+            {0, 0, 1, 0, true},
+            {2, 0, 1, 0, false},
+            {3, 0, 1, 1, false},
+            {4, 0, 3, 0, false},
+            {5, 0, 2, 0, false},
+            {5, 0, 4, 0, false},
+            {6, 0, 5, 0, false},
+        };
+        PureDag.Free = {false, true, true, true, true, true, true};
+        PureDag.Pos.Init(FVector2D::ZeroVector, 7);
+        const FSolution Out = McpRuled::Solve(PureDag, Params);
+        TestTrue(TEXT("shared pure node sits left of its shallow reader"),
+            Out.Pos[5].X + PureDag.Shapes[5].Width + Params.DataGap <= Out.Pos[2].X + 1.0f);
+        TestTrue(TEXT("shared pure node sits left of its deeper reader (no backward wire)"),
+            Out.Pos[5].X + PureDag.Shapes[5].Width + Params.DataGap <= Out.Pos[4].X + 1.0f);
+        for (int32 Node = 0; Node < 7; ++Node)
+        {
+            TestTrue(TEXT("no pure node overhangs left of the fixed entry"),
+                Out.Pos[Node].X >= Out.Pos[0].X - 1.0f);
+        }
+        bool bNoOverlap = true;
+        for (int32 A = 0; A < 7; ++A)
+        {
+            const FBox2D BoxA(Out.Pos[A], Out.Pos[A] + FVector2D(PureDag.Shapes[A].Width, PureDag.Shapes[A].Height));
+            for (int32 B = 0; B < A; ++B)
+            {
+                const FBox2D BoxB(Out.Pos[B], Out.Pos[B] + FVector2D(PureDag.Shapes[B].Width, PureDag.Shapes[B].Height));
+                bNoOverlap &= !(BoxA.Min.X < BoxB.Max.X && BoxB.Min.X < BoxA.Max.X && BoxA.Min.Y < BoxB.Max.Y && BoxB.Min.Y < BoxA.Max.Y);
+            }
+        }
+        TestTrue(TEXT("pure DAG layout has zero overlaps"), bNoOverlap);
+    }
+    // Asymmetric 3-input pure node (deep Option0, shallow Option1, leaf Index pill):
+    // leaf Index sits compactly below Option1 rather than mirroring Option0's huge height as empty space.
+    {
+        FProblem Asym;
+        // 0: Fixed Select-like 3-input pure consumer at (1000, 0)
+        // 1: Option0 (Pure(2)) with 2 tall child pure nodes (4, 5)
+        // 2: Option1 (Pure(1)) with 1 leaf pill (6)
+        // 3: Index (leaf Pill)
+        Asym.Shapes = {Pure(3), Pure(2), Pure(1), Pill(), Pure(3), Pure(3), Pill()};
+        Asym.Links = {
+            {1, 0, 0, 0, false}, {2, 0, 0, 1, false}, {3, 0, 0, 2, false},
+            {4, 0, 1, 0, false}, {5, 0, 1, 1, false},
+            {6, 0, 2, 0, false},
+        };
+        Asym.Free = {false, true, true, true, true, true, true};
+        Asym.Pos.Init(FVector2D::ZeroVector, 7);
+        Asym.Pos[0] = FVector2D(1000.0, 0.0);
+        const FSolution Out = McpRuled::Solve(Asym, Params);
+        const double Gap12 = Out.Pos[3].Y - (Out.Pos[2].Y + Asym.Shapes[2].Height);
+        TestTrue(TEXT("leaf Index sits below Option1 without overlapping"), Gap12 >= Params.InputGap - 1.0);
+        TestTrue(TEXT("leaf Index does not inherit Option0's giant empty vertical gap"), Gap12 < 100.0);
+    }
     return true;
 }
 #endif

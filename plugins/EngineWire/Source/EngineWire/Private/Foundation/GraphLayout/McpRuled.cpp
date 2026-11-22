@@ -273,8 +273,89 @@ private:
         return Box;
     }
 
-    // Lays out the producers of Consumer's data inputs that are still to place (claiming them), Consumer at At.
-    void Feeds(int32 Consumer, const FVector2D& At, FPart& Part)
+    // Computes left-to-right DAG column X coordinates for every unclaimed free pure node feeding Root (at RootX)
+    // so a shared pure producer read at multiple depths always sits to the left of its deepest reader.
+    void ComputeDataX(int32 Root, float RootX, TMap<int32, float>& OutX) const
+    {
+        TArray<int32> Reachable;
+        TSet<int32> Seen;
+        TArray<int32> Open = {Root};
+        while (Open.Num() > 0)
+        {
+            const int32 Consumer = Open.Pop(EAllowShrinking::No);
+            const FShape& Reader = P.Shapes[Consumer];
+            for (const int32 Link : In[Consumer])
+            {
+                const FLink& Each = P.Links[Link];
+                if (Each.bExec || Done[Each.From] || IsExecShape(P.Shapes[Each.From]) ||
+                    !P.Shapes[Each.From].DataOut.IsValidIndex(Each.FromPin) || !Reader.DataIn.IsValidIndex(Each.ToPin))
+                {
+                    continue;
+                }
+                if (!Seen.Contains(Each.From))
+                {
+                    Seen.Add(Each.From);
+                    Reachable.Add(Each.From);
+                    Open.Add(Each.From);
+                }
+            }
+        }
+        if (Reachable.Num() == 0)
+        {
+            return;
+        }
+        for (const int32 Node : Reachable)
+        {
+            OutX.Add(Node, TNumericLimits<float>::Max());
+        }
+        const FShape& RootShape = P.Shapes[Root];
+        for (const int32 Link : In[Root])
+        {
+            const FLink& Each = P.Links[Link];
+            if (!Each.bExec && Seen.Contains(Each.From) && P.Shapes[Each.From].DataOut.IsValidIndex(Each.FromPin) &&
+                RootShape.DataIn.IsValidIndex(Each.ToPin))
+            {
+                float& X = OutX[Each.From];
+                X = FMath::Min(X, RootX - K.DataGap - Width(Each.From));
+            }
+        }
+        for (int32 Pass = 0; Pass < Reachable.Num(); ++Pass)
+        {
+            bool bChanged = false;
+            for (const int32 Consumer : Reachable)
+            {
+                const float ConsumerX = OutX[Consumer];
+                if (ConsumerX >= TNumericLimits<float>::Max() * 0.5f)
+                {
+                    continue;
+                }
+                const FShape& Reader = P.Shapes[Consumer];
+                for (const int32 Link : In[Consumer])
+                {
+                    const FLink& Each = P.Links[Link];
+                    if (!Each.bExec && Seen.Contains(Each.From) && P.Shapes[Each.From].DataOut.IsValidIndex(Each.FromPin) &&
+                        Reader.DataIn.IsValidIndex(Each.ToPin))
+                    {
+                        const float WantX = ConsumerX - K.DataGap - Width(Each.From);
+                        if (WantX < OutX[Each.From] - 0.5f)
+                        {
+                            OutX[Each.From] = WantX;
+                            bChanged = true;
+                        }
+                    }
+                }
+            }
+            if (!bChanged)
+            {
+                break;
+            }
+        }
+    }
+
+    // Recursive worker for Feeds: places unclaimed pure inputs using precomputed DAG X positions (FixedX).
+    // Single-column leaves keep uniform centered pitch; multi-node subtrees pack using exact 2D box clearance so
+    // distant X columns do not force giant vertical gaps.
+    void FeedsWithX(int32 Consumer, float AtY, const TMap<int32, float>& FixedX, FPart& Part)
     {
         struct FChild
         {
@@ -293,10 +374,15 @@ private:
             {
                 continue;
             }
+            const float* NodeX = FixedX.Find(Each.From);
+            if (!NodeX)
+            {
+                continue;
+            }
             Done[Each.From] = true;
             FChild& Kid = Kids.AddDefaulted_GetRef();
-            Kid.Tree.Add(Each.From, FVector2D::ZeroVector);
-            Feeds(Each.From, FVector2D::ZeroVector, Kid.Tree);
+            Kid.Tree.Add(Each.From, FVector2D(*NodeX, 0.0));
+            FeedsWithX(Each.From, 0.0f, FixedX, Kid.Tree);
             Kid.Box = Bounds(P, Kid.Tree);
             Kid.Anchor = P.Shapes[Each.From].DataOut[Each.FromPin];
             Kid.Target = Reader.DataIn[Each.ToPin];
@@ -305,21 +391,86 @@ private:
         {
             return;
         }
-        // Output pins an even pitch apart, the least that keeps the subtrees InputGap apart, centred on the input pins.
-        float Pitch = 0.0f;
-        for (int32 Index = 0; Index + 1 < Kids.Num(); ++Index)
+        if (Kids.Num() == 1)
         {
-            const FChild& Upper = Kids[Index];
-            const FChild& Lower = Kids[Index + 1];
-            Pitch = FMath::Max(Pitch, (Upper.Box.Max.Y - Upper.Anchor) + K.InputGap + (Lower.Anchor - Lower.Box.Min.Y));
+            Part.Append(Kids[0].Tree, FVector2D(0.0, AtY + Kids[0].Target - Kids[0].Anchor));
+            return;
         }
-        const float First = (Kids[0].Target + Kids.Last().Target) * 0.5f - (Kids.Num() - 1) * Pitch * 0.5f;
-        for (int32 Index = 0; Index < Kids.Num(); ++Index)
+        bool bAllLeaves = true;
+        for (const FChild& Kid : Kids)
+        {
+            bAllLeaves &= (Kid.Tree.Nodes.Num() == 1);
+        }
+        if (bAllLeaves)
+        {
+            // Output pins an even pitch apart, the least that keeps the subtrees InputGap apart, centred on the input pins.
+            float Pitch = 0.0f;
+            for (int32 Index = 0; Index + 1 < Kids.Num(); ++Index)
+            {
+                const FChild& Upper = Kids[Index];
+                const FChild& Lower = Kids[Index + 1];
+                Pitch = FMath::Max(Pitch, (Upper.Box.Max.Y - Upper.Anchor) + K.InputGap + (Lower.Anchor - Lower.Box.Min.Y));
+            }
+            const float First = (Kids[0].Target + Kids.Last().Target) * 0.5f - (Kids.Num() - 1) * Pitch * 0.5f;
+            for (int32 Index = 0; Index < Kids.Num(); ++Index)
+            {
+                const FChild& Kid = Kids[Index];
+                const float Line = First + Index * Pitch;
+                Part.Append(Kid.Tree, FVector2D(0.0, AtY + Line - Kid.Anchor));
+            }
+            return;
+        }
+        // Multi-node subtrees: pack each sibling against earlier siblings using actual 2D X-overlap clearance while
+        // preserving top-to-bottom pin order.
+        TArray<float> RelY;
+        RelY.SetNum(Kids.Num());
+        TArray<FBox2D> Placed;
+        RelY[0] = 0.0f;
+        for (int32 NodeAt = 0; NodeAt < Kids[0].Tree.Nodes.Num(); ++NodeAt)
+        {
+            const FVector2D Pos0(Kids[0].Tree.At[NodeAt].X, Kids[0].Tree.At[NodeAt].Y - Kids[0].Anchor);
+            Placed.Add(BoxAt(Kids[0].Tree.Nodes[NodeAt], Pos0));
+        }
+        for (int32 Index = 1; Index < Kids.Num(); ++Index)
         {
             const FChild& Kid = Kids[Index];
-            const float Line = Kids.Num() == 1 ? Kid.Target : First + Index * Pitch;
-            const FVector2D Offset(At.X - K.DataGap - Width(Kid.Tree.Nodes[0]), At.Y + Line - Kid.Anchor);
-            Part.Append(Kid.Tree, Offset);
+            float Line = RelY[Index - 1] + FMath::Max(0.0f, Kid.Target - Kids[Index - 1].Target);
+            for (int32 NodeAt = 0; NodeAt < Kid.Tree.Nodes.Num(); ++NodeAt)
+            {
+                const int32 KidNode = Kid.Tree.Nodes[NodeAt];
+                const float MinX = static_cast<float>(Kid.Tree.At[NodeAt].X);
+                const float MaxX = MinX + P.Shapes[KidNode].Width;
+                const float LocalMinY = static_cast<float>(Kid.Tree.At[NodeAt].Y);
+                for (const FBox2D& Earlier : Placed)
+                {
+                    if (Earlier.Min.X - K.NodePad < MaxX && MinX - K.NodePad < Earlier.Max.X)
+                    {
+                        Line = FMath::Max(Line, static_cast<float>(Earlier.Max.Y + K.InputGap + Kid.Anchor - LocalMinY));
+                    }
+                }
+            }
+            RelY[Index] = Line;
+            for (int32 NodeAt = 0; NodeAt < Kid.Tree.Nodes.Num(); ++NodeAt)
+            {
+                const FVector2D PosK(Kid.Tree.At[NodeAt].X, Line - Kid.Anchor + Kid.Tree.At[NodeAt].Y);
+                Placed.Add(BoxAt(Kid.Tree.Nodes[NodeAt], PosK));
+            }
+        }
+        const float Shift = (Kids[0].Target + Kids.Last().Target) * 0.5f - (RelY[0] + RelY.Last()) * 0.5f;
+        for (int32 Index = 0; Index < Kids.Num(); ++Index)
+        {
+            Part.Append(Kids[Index].Tree, FVector2D(0.0, AtY + Shift + RelY[Index] - Kids[Index].Anchor));
+        }
+    }
+
+    // Lays out the producers of Consumer's data inputs that are still to place (claiming them), Consumer at At.
+    void Feeds(int32 Consumer, const FVector2D& At, FPart& Part)
+    {
+        TMap<int32, float> FixedX;
+        ComputeDataX(Consumer, static_cast<float>(At.X), FixedX);
+        if (FixedX.Num() > 0)
+        {
+            FeedsWithX(Consumer, static_cast<float>(At.Y), FixedX, Part);
         }
     }
 
@@ -919,6 +1070,14 @@ private:
                     }
                 }
             }
+            // Keep a row that begins at an entry/event from sending its pure data branches behind the entry's left edge.
+            if (Row.Num() > 0 && P.Shapes[Start.Node].ExecIn < 0.0f)
+            {
+                for (int32 DataIndex = 0; DataIndex < Data.Nodes.Num(); ++DataIndex)
+                {
+                    X = FMath::Max(X, -static_cast<float>(Data.At[DataIndex].X));
+                }
+            }
             if (Row.Num() > 0 && X + Shape.Width > K.MaxRowWidth)
             {
                 Done[Node] = false;
@@ -989,6 +1148,20 @@ private:
                     {
                         Want.X = FMath::Max(Want.X, Pos[Incoming.From].X + P.Shapes[Incoming.From].Width +
                             K.DataGap - Part.At[PartIndex].X);
+                    }
+                }
+            }
+            // A row continuing directly from a fixed entry/event keeps its pure data branches from overhanging
+            // to the left of the entry's left edge.
+            if (Start.Link != INDEX_NONE && !Start.bSide)
+            {
+                const int32 EntryNode = P.Links[Start.Link].From;
+                if (P.Shapes[EntryNode].ExecIn < 0.0f)
+                {
+                    const FBox2D PartBounds = Bounds(P, Part);
+                    if (PartBounds.bIsValid)
+                    {
+                        Want.X = FMath::Max(Want.X, static_cast<float>(Pos[EntryNode].X) - static_cast<float>(PartBounds.Min.X));
                     }
                 }
             }
