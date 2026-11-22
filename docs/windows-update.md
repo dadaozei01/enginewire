@@ -1,6 +1,23 @@
 # Windows 更新到最新 UE 5.8 版（给 Windows 上的 Agent）
 
-## 直接安装发布包：v0.8.0-ue58
+## 本轮交接：蓝图排版修复（2026-11-22）
+
+用户要求在公司 Windows 电脑更新插件。**本轮走源码构建路径，不直接安装下面的旧 Release ZIP。** 排版修复 `9fa676273130494058b0749f37baffd3f4f5c3a7` 已通过 [PR #13](https://github.com/dadaozei01/enginewire/pull/13) 合入 `main`，合并提交为 `3e0efd7c8dfc222fdede86b20db61f3515c85754`。现有 v0.8.0 Release ZIP 是否包含该修复尚未确认。
+
+给公司 Codex 的执行要求：
+
+- 按本页第 0–5、7–8 节执行：只读确认本机引擎、目标工程和安装层级，拉取最新 `main`，完整编译 Win64，备份后替换并实测。不要沿用 Mac 工程路径或假定 Windows 已安装的插件版本。
+- 更新后运行 `git merge-base --is-ancestor 9fa676273130494058b0749f37baffd3f4f5c3a7 HEAD`，必须成功；记录实际构建的 `git rev-parse HEAD`。使用最新 `main`，不要切回历史修复分支。
+- 本轮新增：真实 Slate 节点尺寸与引脚位置、执行流对齐、Return/Completed 回线走廊、远距离普通成员变量 Get 就近复制。**事件图与函数内部都要验证**；不要复制有副作用的节点或随意复制纯函数调用。
+- Mac UE 5.8.4 Universal（arm64/x86_64）构建及四项 GraphLayout 自动化已通过，真实冒泡排序测试蓝图编译、语义回归和视觉排版已验收；这些结果不代表 Windows/MSVC 已验证本轮修复。
+- 本轮编译兼容性修复分支使用 `fix/win-msvc-layout-20261122`（已存在则检查后使用或加唯一后缀），替代下文旧示例 `fix/win-msvc-v080`。修复可推送该分支，不自动合并主线。
+- 第 6 节本轮按需执行；如需留存 ZIP，使用独立版本名 `dev-layout-<实际源码短 SHA>`，不要覆盖旧 v0.8.0 包，不上传 Release。
+
+可直接给 Codex：
+
+> 请按 main 分支 docs/windows-update.md 的“本轮交接：蓝图排版修复”更新这台电脑的 EngineWire：拉取 main，确认包含 9fa6762，编译 UE 5.8.4 Win64，备份替换本机目标工程现有插件，完成 MCP 与事件图/函数排版回归。先核实工程和编辑器状态，保留未保存工作；需要关闭编辑器时先让我保存关闭。失败按文档回退，最后报告实际源码 SHA、备份位置和测试结果。不发布 Release，不自动合并兼容性修复分支。
+
+## 直接安装发布包：v0.8.0-ue58（历史包，本轮不采用）
 
 在 [Release Assets](https://github.com/dadaozei01/enginewire/releases/tag/v0.8.0-ue58#release-assets) 下载 `EngineWire-v0.8.0-ue58-UE5.8.4-Win64.zip` 和 `SHA256SUMS-Win64.txt`。用 PowerShell 的 `Get-FileHash -Algorithm SHA256` 核对 ZIP 后解压，按第 4 节安装（将 `-Package` 指向解压目录）。仅安装不需要重新编译。
 
@@ -124,7 +141,10 @@ powershell -ExecutionPolicy Bypass -File scripts\install-enginewire.ps1 -Package
 8. `control_editor play control=play`，在 PIE 中读一次粒子数据，`control=stop`；查日志中有没有新的 Niagara 错误。
 9. 把第 7 步的 GPU 副本放进关卡，`get_niagara_particle_data` 能读回粒子（回执带 readbackMs）；`set_niagara_sim_target target=CPU` 后 `compileOk` 为 true，`step_niagara_simulation reset=true frames=1` 成功，再 `frames=1` 一次，两次读回的粒子位置不同。
 10. 蓝图自动排版：新建 `/Game/EwTest/BP_Layout_CTest`（Actor），`manage_blueprint` 的 `edit_graph` `batch` 在 BeginPlay 后接 Branch（条件来自一个比较节点），True 接 PrintString、False 接 Delay，节点都不给坐标；编译通过，读图确认执行节点从左到右、False 分支在 True 行下方、节点不重叠。
-11. 运行自动化测试 `EngineWire.Foundation.GraphLayout.Ruled`（`system_control` 的 run_tests 或编辑器 Session Frontend），结果为通过。
+11. 运行完整自动化前缀 `EngineWire.Foundation.GraphLayout`（`system_control` 的 run_tests 或编辑器 Session Frontend），核对 `Geometry`、`Layered`、`Ruled` 均通过。`Fixture` 未设置 `ENGINEWIRE_LAYOUT_FIXTURE` 时会跳过实际资产验证，不能算真实蓝图回归：如需运行，须在隔离测试工程中使用用户授权测试蓝图的副本，环境变量填写该副本对象路径，绝不指向正式资产。另做以下可视回归：
+    - 在本轮临时蓝图中分别检查 EventGraph 和一个带循环、Branch、Return 的函数；明确调用 `arrange_nodes`、`layout=ruled` 后重新编译并读回。节点不重叠，执行线对齐，Return/Completed 回线不穿过主体。
+    - 普通成员变量 Get 同时供给相隔四五个节点的消费者时，远处消费者旁应出现就近 Get；相邻的两个数组 Get 可共用一个局部 Get。比较排版前后引脚类型、默认值与数据来源，执行与返回结果应一致；只增加获准的 Get/转接节点。
+    - 保存排版前后截图并报告可视结论。测试资产仅使用本轮创建或明确获准的副本，不对用户业务蓝图批量排版。
 12. 删除所有 `_CTest` 资产和放置的 Actor。
 
 ## 6. 打包（不发布）
@@ -147,5 +167,6 @@ powershell -ExecutionPolicy Bypass -File scripts\build-ue58-win.ps1 -Zip -Versio
 - 编译结果；EngineWire 自身的新警告或错误（C4996 弃用警告不用列）。
 - 是否改过代码：分支名、diff、对应报错原文。
 - 第 5 步逐项通过或失败，附关键回执字段。
-- 安装位置、备份位置、ZIP 路径与 SHA256。
+- 实际源码提交 SHA、引擎版本/BuildId、安装位置、备份位置；若打包，附 ZIP 路径与 SHA256。
+- 事件图与函数排版的前后截图、编译与结果一致性；自动化逐项结果，Fixture 是否实际执行或跳过。
 - 手册同步了哪些、改了什么。
