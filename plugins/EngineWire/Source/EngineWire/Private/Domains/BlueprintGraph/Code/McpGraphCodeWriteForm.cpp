@@ -15,30 +15,31 @@ namespace Write
 {
 namespace WriteFormParts
 {
-// Left of and below everything in the graph: where a made entry starts.
-FVector2D FreeSpot(const UEdGraph* Graph)
+// Left of and below everything settled in the graph: where a made entry starts.
+FVector2D FreeSpot(const UEdGraph* Graph, const TSet<UEdGraphNode*>& Ignore)
 {
     float Left = TNumericLimits<float>::Max();
     float Bottom = -TNumericLimits<float>::Max();
     for (const UEdGraphNode* Node : Graph->Nodes)
     {
+        if (!Node || Ignore.Contains(Node))
+        {
+            continue;
+        }
         float Width = 0.0f;
         float Height = 0.0f;
-        if (Node)
-        {
-            McpGraphLayout::EstimateNodeExtent(*Node, Width, Height);
-            Left = FMath::Min(Left, static_cast<float>(Node->NodePosX));
-            Bottom = FMath::Max(Bottom, Node->NodePosY + Height);
-        }
+        McpGraphLayout::EstimateNodeExtent(*Node, Width, Height);
+        Left = FMath::Min(Left, static_cast<float>(Node->NodePosX));
+        Bottom = FMath::Max(Bottom, Node->NodePosY + Height);
     }
     return Bottom > -TNumericLimits<float>::Max() ? FVector2D(Left, Bottom + 200.0f) : FVector2D::ZeroVector;
 }
 
 // A form's new nodes laid out in the house style (McpRuled) from its entry; an entry the graph had and kept nodes
-// stay where they are, a made entry starts its own region clear of the others, and the old body it replaces is not in
-// the way. Returns the lowest bottom edge of the form.
+// stay where they are, a made entry starts its own region clear of the others, and ignored nodes (old bodies about to
+// go, or other forms not yet laid out) are not in the way. Returns the lowest bottom edge of the form.
 float LayoutForm(UEdGraph* Graph, const TArray<UEdGraphNode*>& Nodes, const TSet<UEdGraphNode*>& Kept, const FVector2D& Spot,
-                 const TSet<UEdGraphNode*>& Replaced, bool bEntryMade)
+                 const TSet<UEdGraphNode*>& Ignore, bool bEntryMade, const McpRuled::FParams& Params = McpRuled::FParams())
 {
     TArray<UEdGraphNode*> Free;
     for (int32 At = bEntryMade ? 0 : 1; At < Nodes.Num(); ++At)
@@ -48,10 +49,11 @@ float LayoutForm(UEdGraph* Graph, const TArray<UEdGraphNode*>& Nodes, const TSet
             Free.Add(Nodes[At]);
         }
     }
+    const float LaidBottom = McpRuled::LayoutNodes(Graph, Free, &Spot, nullptr, &Ignore, Params);
     float Width = 0.0f;
     float Height = 0.0f;
     McpGraphLayout::EstimateNodeExtent(*Nodes[0], Width, Height);
-    return FMath::Max(Nodes[0]->NodePosY + Height, McpRuled::LayoutNodes(Graph, Free, &Spot, nullptr, &Replaced));
+    return FMath::Max(Nodes[0]->NodePosY + Height, LaidBottom);
 }
 
 // Epic's _uses_symbol: the symbol anywhere in the forms.
@@ -201,7 +203,6 @@ bool BuildForms(UBlueprint* Blueprint, const TArray<FSExpr>& Forms, const TArray
 {
     FTranspiler Transpiler(Blueprint, Plan.Graph, MenuEntries(Blueprint, Plan.Graph, Candidates, Titles));
     Transpiler.Reusable.Append(Plan.Old);
-    FVector2D Spot = FreeSpot(Plan.Graph);
     TArray<TArray<UEdGraphNode*>> FormNodes;
     for (int32 At = 0; At < Plan.Forms.Num(); ++At)
     {
@@ -238,28 +239,73 @@ bool BuildForms(UBlueprint* Blueprint, const TArray<FSExpr>& Forms, const TArray
     Plan.Old.RemoveAll([&Transpiler](UEdGraphNode* Node) { return Transpiler.Kept.Contains(Node); });
     Plan.Kept = Transpiler.Kept.Num();
     // Each form is laid out among the others by region: McpRuled keeps every event's logic RegionGap clear of the rest.
+    // Every new node not yet laid out stays in Unplaced (ignored by earlier passes and FreeSpot) so unpositioned nodes
+    // sitting at (0, 0) never act as fixed obstacles for another form's layout.
     const TSet<UEdGraphNode*> Replaced(Plan.Old);
-    // Forms on entries the graph has first, their logic growing where it is; then the made events, below all of it,
-    // so one event's region never ends up in among another's.
-    for (int32 Pass = 0; Pass < 2; ++Pass)
+    TSet<UEdGraphNode*> Unplaced;
+    for (int32 At = 0; At < FormNodes.Num(); ++At)
     {
-        if (Pass == 1)
+        const bool bMade = Plan.Entries[At] == nullptr;
+        for (int32 Index = bMade ? 0 : 1; Index < FormNodes[At].Num(); ++Index)
         {
-            Spot = FreeSpot(Plan.Graph);
-        }
-        for (int32 At = 0; At < FormNodes.Num(); ++At)
-        {
-            const bool bMade = Plan.Entries[At] == nullptr;
-            if (bMade != (Pass == 1))
+            if (!Transpiler.Kept.Contains(FormNodes[At][Index]))
             {
-                continue;
-            }
-            const float Bottom = LayoutForm(Plan.Graph, FormNodes[At], Transpiler.Kept, Spot, Replaced, bMade);
-            if (bMade)
-            {
-                Spot.Y = Bottom + 200.0f;
+                Unplaced.Add(FormNodes[At][Index]);
             }
         }
+    }
+    // Pass 0: lay out all forms reusing existing entries together so each sees its own entry anchor cleanly without
+    // sibling forms' unplaced nodes blocking it. When writing fresh bodies onto existing entries (no kept chain nodes),
+    // keep untouched events and other regions fixed and slide new calls right; when editing an existing kept chain,
+    // keep bAllowMovingExisting enabled so insertions can shift downstream nodes or push room down.
+    TArray<UEdGraphNode*> ExistingFree;
+    bool bPass0HasKept = false;
+    for (int32 At = 0; At < FormNodes.Num(); ++At)
+    {
+        if (Plan.Entries[At] != nullptr)
+        {
+            for (int32 Index = 1; Index < FormNodes[At].Num(); ++Index)
+            {
+                UEdGraphNode* Node = FormNodes[At][Index];
+                if (Transpiler.Kept.Contains(Node))
+                {
+                    bPass0HasKept = true;
+                }
+                else
+                {
+                    ExistingFree.Add(Node);
+                    Unplaced.Remove(Node);
+                }
+            }
+        }
+    }
+    if (ExistingFree.Num() > 0)
+    {
+        TSet<UEdGraphNode*> Ignore = Replaced;
+        Ignore.Append(Unplaced);
+        const FVector2D Spot = FreeSpot(Plan.Graph, Ignore);
+        McpRuled::FParams ExistingParams;
+        ExistingParams.bAllowMovingExisting = bPass0HasKept;
+        McpRuled::LayoutNodes(Plan.Graph, ExistingFree, &Spot, nullptr, &Ignore, ExistingParams);
+    }
+    // Pass 1: lay out each newly created event below the settled graph, ignoring later unplaced forms.
+    TSet<UEdGraphNode*> Pass1SpotIgnore = Replaced;
+    Pass1SpotIgnore.Append(Unplaced);
+    FVector2D Spot = FreeSpot(Plan.Graph, Pass1SpotIgnore);
+    for (int32 At = 0; At < FormNodes.Num(); ++At)
+    {
+        if (Plan.Entries[At] != nullptr)
+        {
+            continue;
+        }
+        for (UEdGraphNode* Node : FormNodes[At])
+        {
+            Unplaced.Remove(Node);
+        }
+        TSet<UEdGraphNode*> Ignore = Replaced;
+        Ignore.Append(Unplaced);
+        const float Bottom = LayoutForm(Plan.Graph, FormNodes[At], Transpiler.Kept, Spot, Ignore, true);
+        Spot.Y = Bottom + 200.0f;
     }
     Made.Append(Transpiler.Made);
     return true;
