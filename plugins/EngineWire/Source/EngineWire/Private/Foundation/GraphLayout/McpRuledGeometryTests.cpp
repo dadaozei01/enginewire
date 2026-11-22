@@ -12,7 +12,9 @@
 #include "K2Node_Self.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
+#include "Components/SplineComponent.h"
 #include "Kismet/KismetArrayLibrary.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "NodeFactory.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -400,6 +402,139 @@ bool FMcpRuledLocalizationTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("distant Self consumer receives a localized Self node"), SelfCopies, 1);
         FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkipSave);
         TestTrue(TEXT("Blueprint with localized Self compiles"), Blueprint->Status != BS_Error);
+    }
+
+    // 5. Zero-arg native const BlueprintPure member getter (Spline -> GetSplineLength) is localized together with its target getter.
+    {
+        const FEdGraphPinType SplineType(UEdGraphSchema_K2::PC_Object, NAME_None, USplineComponent::StaticClass(), EPinContainerType::None, false, FEdGraphTerminalType());
+        const FEdGraphPinType VectorType(UEdGraphSchema_K2::PC_Struct, NAME_None, TBaseStructure<FVector>::Get(), EPinContainerType::None, false, FEdGraphTerminalType());
+        const FEdGraphPinType FloatType(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Float, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("TestSpline"), SplineType);
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("SinkVector"), VectorType);
+        FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("SinkFloat"), FloatType);
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkipSave);
+
+        UEdGraph* FuncGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, TEXT("ConstPureGetterFunc"),
+            UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+        FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, true, nullptr);
+        UK2Node_FunctionEntry* Entry = nullptr;
+        for (UEdGraphNode* Node : FuncGraph->Nodes)
+        {
+            Entry = Entry ? Entry : Cast<UK2Node_FunctionEntry>(Node);
+        }
+        if (!TestNotNull(TEXT("ConstPureGetterFunc entry exists"), Entry)) { return false; }
+
+        UK2Node_VariableGet* GetSpline = NewObject<UK2Node_VariableGet>(FuncGraph);
+        GetSpline->CreateNewGuid();
+        GetSpline->VariableReference.SetSelfMember(TEXT("TestSpline"));
+        FuncGraph->AddNode(GetSpline, false, false);
+        GetSpline->AllocateDefaultPins();
+
+        UK2Node_CallFunction* GetLength = NewObject<UK2Node_CallFunction>(FuncGraph);
+        GetLength->CreateNewGuid();
+        GetLength->SetFromFunction(USplineComponent::StaticClass()->FindFunctionByName(TEXT("GetSplineLength")));
+        FuncGraph->AddNode(GetLength, false, false);
+        GetLength->AllocateDefaultPins();
+        TestTrue(TEXT("GetSplineLength is pure"), GetLength->IsNodePure());
+        TestNotNull(TEXT("GetSpline resolves property"), GetSpline->GetPropertyForVariable());
+        GetSpline->FindPin(TEXT("TestSpline"), EGPD_Output)->MakeLinkTo(GetLength->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input));
+
+        // Also include a parameterized const call (GetLocationAtDistanceAlongSpline) and a static math call (Multiply_DoubleDouble)
+        // to verify neither is ever auto-duplicated.
+        UK2Node_CallFunction* GetLocAtDist = NewObject<UK2Node_CallFunction>(FuncGraph);
+        GetLocAtDist->CreateNewGuid();
+        GetLocAtDist->SetFromFunction(USplineComponent::StaticClass()->FindFunctionByName(TEXT("GetLocationAtDistanceAlongSpline")));
+        FuncGraph->AddNode(GetLocAtDist, false, false);
+        GetLocAtDist->AllocateDefaultPins();
+        GetSpline->FindPin(TEXT("TestSpline"), EGPD_Output)->MakeLinkTo(GetLocAtDist->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input));
+
+        UK2Node_CallFunction* StaticMul = NewObject<UK2Node_CallFunction>(FuncGraph);
+        StaticMul->CreateNewGuid();
+        StaticMul->SetFromFunction(UKismetMathLibrary::StaticClass()->FindFunctionByName(TEXT("Multiply_DoubleDouble")));
+        FuncGraph->AddNode(StaticMul, false, false);
+        StaticMul->AllocateDefaultPins();
+
+        const auto MakeSetVar = [&](const FName VarName) -> UK2Node_VariableSet*
+        {
+            UK2Node_VariableSet* Node = NewObject<UK2Node_VariableSet>(FuncGraph);
+            Node->CreateNewGuid();
+            Node->VariableReference.SetSelfMember(VarName);
+            FuncGraph->AddNode(Node, false, false);
+            Node->AllocateDefaultPins();
+            return Node;
+        };
+
+        UK2Node_VariableSet* NearLen = MakeSetVar(TEXT("SinkFloat"));
+        UK2Node_VariableSet* NearLoc = MakeSetVar(TEXT("SinkVector"));
+        UK2Node_VariableSet* NearMul = MakeSetVar(TEXT("SinkDouble"));
+        UK2Node_VariableSet* FarLen = MakeSetVar(TEXT("SinkFloat"));
+        UK2Node_VariableSet* FarLoc = MakeSetVar(TEXT("SinkVector"));
+        UK2Node_VariableSet* FarMul = MakeSetVar(TEXT("SinkDouble"));
+
+        TArray<UEdGraphNode*> Nodes = {Entry, NearLen, NearLoc, NearMul, GetSpline, GetLength, GetLocAtDist, StaticMul};
+        Entry->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(NearLen->FindPin(UEdGraphSchema_K2::PN_Execute));
+        NearLen->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(NearLoc->FindPin(UEdGraphSchema_K2::PN_Execute));
+        NearLoc->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(NearMul->FindPin(UEdGraphSchema_K2::PN_Execute));
+        UEdGraphPin* Tail = MakeExecDelayChain(FuncGraph, NearMul->FindPin(UEdGraphSchema_K2::PN_Then), 4, Nodes);
+        Tail->MakeLinkTo(FarLen->FindPin(UEdGraphSchema_K2::PN_Execute));
+        FarLen->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(FarLoc->FindPin(UEdGraphSchema_K2::PN_Execute));
+        FarLoc->FindPin(UEdGraphSchema_K2::PN_Then)->MakeLinkTo(FarMul->FindPin(UEdGraphSchema_K2::PN_Execute));
+        Nodes.Add(FarLen);
+        Nodes.Add(FarLoc);
+        Nodes.Add(FarMul);
+
+        UEdGraphPin* NearLenIn = NearLen->FindPin(TEXT("SinkFloat"), EGPD_Input);
+        UEdGraphPin* FarLenIn = FarLen->FindPin(TEXT("SinkFloat"), EGPD_Input);
+        TestNotNull(TEXT("NearLen SinkFloat input pin exists"), NearLenIn);
+        TestNotNull(TEXT("FarLen SinkFloat input pin exists"), FarLenIn);
+        GetLength->GetReturnValuePin()->MakeLinkTo(NearLenIn);
+        GetLength->GetReturnValuePin()->MakeLinkTo(FarLenIn);
+        GetLocAtDist->GetReturnValuePin()->MakeLinkTo(NearLoc->FindPin(TEXT("SinkVector"), EGPD_Input));
+        GetLocAtDist->GetReturnValuePin()->MakeLinkTo(FarLoc->FindPin(TEXT("SinkVector"), EGPD_Input));
+        StaticMul->GetReturnValuePin()->MakeLinkTo(NearMul->FindPin(TEXT("SinkDouble"), EGPD_Input));
+        StaticMul->GetReturnValuePin()->MakeLinkTo(FarMul->FindPin(TEXT("SinkDouble"), EGPD_Input));
+
+        McpRuled::FParams Params;
+        Params.bLocalizeSharedGetters = true;
+        const FVector2D Origin = FVector2D::ZeroVector;
+        FString Failure;
+        TArray<UEdGraphNode*> Added;
+        McpRuled::LayoutNodes(FuncGraph, Nodes, &Origin, &Added, nullptr, Params, &Failure);
+        TestTrue(*FString::Printf(TEXT("const pure getter localization layout succeeds: %s"), *Failure), Failure.IsEmpty());
+        TestTrue(*FString::Printf(TEXT("FarLen is far right of GetLength (%d vs %d)"), FarLen->NodePosX, GetLength->NodePosX),
+            FarLen->NodePosX - GetLength->NodePosX >= 768);
+
+        int32 LenCopies = 0;
+        int32 LocCopies = 0;
+        int32 MulCopies = 0;
+        int32 SplineGetCopies = 0;
+        for (UEdGraphNode* Node : Added)
+        {
+            if (const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+            {
+                const FName FuncName = Call->GetTargetFunction() ? Call->GetTargetFunction()->GetFName() : NAME_None;
+                LenCopies += FuncName == TEXT("GetSplineLength") ? 1 : 0;
+                LocCopies += FuncName == TEXT("GetLocationAtDistanceAlongSpline") ? 1 : 0;
+                MulCopies += FuncName == TEXT("Multiply_DoubleDouble") ? 1 : 0;
+                if (FuncName == TEXT("GetSplineLength"))
+                {
+                    UEdGraphPin* SelfIn = Call->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input);
+                    TestTrue(TEXT("cloned GetSplineLength receives its own cloned Get Spline target"),
+                        SelfIn && SelfIn->LinkedTo.Num() == 1 && SelfIn->LinkedTo[0]->GetOwningNode() != GetSpline &&
+                        SelfIn->LinkedTo[0]->GetOwningNode()->IsA<UK2Node_VariableGet>());
+                }
+            }
+            else if (const UK2Node_VariableGet* Get = Cast<UK2Node_VariableGet>(Node))
+            {
+                SplineGetCopies += Get->GetVarName() == TEXT("TestSpline") ? 1 : 0;
+            }
+        }
+        TestEqual(TEXT("zero-arg native const pure getter (GetSplineLength) is localized"), LenCopies, 1);
+        TestTrue(TEXT("GetSplineLength target getter (TestSpline) is also localized"), SplineGetCopies >= 1);
+        TestEqual(TEXT("parameterized const pure call (GetLocationAtDistanceAlongSpline) is never duplicated"), LocCopies, 0);
+        TestEqual(TEXT("static math function (Multiply_DoubleDouble) is never duplicated"), MulCopies, 0);
+        FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection | EBlueprintCompileOptions::SkipSave);
+        TestTrue(TEXT("Blueprint with localized const pure getter compiles"), Blueprint->Status != BS_Error);
     }
 
     return true;

@@ -9,6 +9,7 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphNode_Comment.h"
+#include "K2Node_CallFunction.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_Knot.h"
 #include "K2Node_Self.h"
@@ -49,6 +50,34 @@ FString SourceId(const UEdGraphNode* Node)
             FString Reference;
             FMemberReference::StaticStruct()->ExportText(Reference, &Getter->VariableReference, nullptr, nullptr, PPF_None, nullptr);
             return TEXT("local-get:") + Reference;
+        }
+    }
+    if (const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+    {
+        const UFunction* Function = Call->GetClass() == UK2Node_CallFunction::StaticClass() && Call->IsNodePure()
+            ? Call->GetTargetFunction()
+            : nullptr;
+        if (Function && !Call->IsLatentFunction() &&
+            Function->HasAllFunctionFlags(FUNC_Native | FUNC_Const) &&
+            !Function->HasAnyFunctionFlags(FUNC_Static | FUNC_Event | FUNC_BlueprintEvent | FUNC_Net))
+        {
+            UEdGraphPin* SelfPin = nullptr;
+            bool bExtra = false;
+            for (UEdGraphPin* Pin : Call->Pins)
+            {
+                if (Pin->Direction != EGPD_Input) { continue; }
+                if (Pin->PinName == UEdGraphSchema_K2::PN_Self) { SelfPin = Pin; continue; }
+                if (!Pin->bHidden || Pin->LinkedTo.Num() > 0) { bExtra = true; break; }
+            }
+            if (!bExtra)
+            {
+                FString TargetId = TEXT("self");
+                if (SelfPin && SelfPin->LinkedTo.Num() == 1 && SelfPin->LinkedTo[0])
+                {
+                    TargetId = SourceId(SelfPin->LinkedTo[0]->GetOwningNode()) + TEXT(".") + SelfPin->LinkedTo[0]->PinName.ToString();
+                }
+                return TEXT("const-get:") + Function->GetPathName() + TEXT("(") + TargetId + TEXT(")");
+            }
         }
     }
     return Node->NodeGuid.ToString();
