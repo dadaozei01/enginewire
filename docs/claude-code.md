@@ -90,3 +90,7 @@ claude mcp get unreal
 ## 故障定位
 
 Failed to connect：确认 UE 已启动且 3000 端口在监听，先启动 UE 再连接。401：工程路径指向了别的工程，或令牌已重新生成；自动识别时多为换了工程但没重连 MCP。helper 报 Cannot read MCP capability token 时，冒号后面是原因：Nothing is listening on port 表示 UE 或 Native MCP 未启动；Port owner is not UnrealEditor 表示端口被别的程序占用；Editor command line has no .uproject 表示编辑器未带工程参数启动，且引擎用户目录下也没有 `Saved\MCP`，改用固定工程写法；找不到令牌文件表示工程路径错误或 Native MCP 未启动过。工具调用方式见 agent-guide.md。
+
+## 蓝图排版
+
+新增节点与连线同批提交。局部整理用 `arrange_nodes` 保留未选锚点，批量插入可在受影响区域腾位。按 [蓝图排版与验收](agent-guide.md#蓝图排版与验收) 检查实际执行引脚、节点净空、连线和编译。

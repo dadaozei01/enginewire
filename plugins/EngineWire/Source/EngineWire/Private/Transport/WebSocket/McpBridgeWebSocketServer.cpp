@@ -2,6 +2,7 @@
 
 #include "EngineWireSettings.h"
 #include "EngineWireSubsystem.h"
+#include "Transport/McpListenSocket.h"
 #include "Transport/WebSocket/McpBridgeWebSocketPrivate.h"
 
 #include "HAL/PlatformProcess.h"
@@ -33,7 +34,7 @@ uint32 FMcpBridgeWebSocket::RunServer() {
     });
     return 0;
   };
-  // (Re)creates the blocking, reuse-addr listen socket for a family (NAME_None = IPv4).
+  // (Re)creates the blocking listen socket for a family (NAME_None = IPv4).
   const auto OpenListenSocket = [this, SocketSubsystem](const FName Protocol) {
     if (ListenSocket) {
       SocketSubsystem->DestroySocket(ListenSocket);
@@ -41,7 +42,6 @@ uint32 FMcpBridgeWebSocket::RunServer() {
     ListenSocket = SocketSubsystem->CreateSocket(
         NAME_Stream, TEXT("EngineWireListenSocket"), Protocol);
     if (ListenSocket) {
-      ListenSocket->SetReuseAddr(true);
       ListenSocket->SetNonBlocking(false);
     }
     return ListenSocket != nullptr;
@@ -170,14 +170,21 @@ uint32 FMcpBridgeWebSocket::RunServer() {
 
   ListenAddr->SetPort(Port);
 
+  const FString Endpoint = ListenAddr->ToString(true);
+  if (!EngineWire::ConfigureListenSocket(*ListenSocket)) {
+    return Fail(*FString::Printf(TEXT("WebSocket listener could not configure socket for %s"),
+                                *Endpoint));
+  }
   if (!ListenSocket->Bind(*ListenAddr)) {
-    return Fail(TEXT("Failed to bind listen socket"));
+    return Fail(*FString::Printf(TEXT("WebSocket listener failed to bind to %s"),
+                                *Endpoint));
   }
   UE_LOG(LogEngineWireSubsystem, Log, TEXT("Listen socket bound to %s."),
          *ListenAddr->ToString(false));
 
   if (!ListenSocket->Listen(ListenBacklog > 0 ? ListenBacklog : 10)) {
-    return Fail(TEXT("Failed to listen on socket"));
+    return Fail(*FString::Printf(TEXT("WebSocket listener failed to listen on %s"),
+                                *Endpoint));
   }
 
   bListening = true;

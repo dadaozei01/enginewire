@@ -15,3 +15,7 @@ tool_timeout_sec = 120
 UE 先启动 Native MCP，再重启 Codex，确认 unreal 工具出现后进行只读查询。其他 Agent 配置相同 HTTP 地址和动态请求头即可；如果不支持动态请求头，使用上游匹配版本的代理，参考上游文档，不要混用旧稳定版服务端。
 
 参考：[Codex MCP](https://developers.openai.com/codex/mcp/)、[配置参考](https://developers.openai.com/codex/config-reference/)。
+
+## 蓝图排版
+
+新增节点与连线同批提交。局部整理用 `arrange_nodes` 保留未选锚点，批量插入可在受影响区域腾位。按 [蓝图排版与验收](agent-guide.md#蓝图排版与验收) 检查实际执行引脚、节点净空、连线和编译。

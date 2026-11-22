@@ -282,6 +282,25 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
             bClear &= !Box.ExpandBy(Params.NodePad - 1.0).Intersect(Lower);
         }
         TestTrue(TEXT("nothing of the insert overlaps it"), bClear);
+
+        McpRuled::FParams Arrange;
+        Arrange.bAllowMovingExisting = false;
+        const FSolution Fixed = McpRuled::Solve(Dense, Arrange);
+        TestTrue(TEXT("arrange keeps all unlisted nodes fixed"),
+                 Fixed.Pos[0] == Dense.Pos[0] && Fixed.Pos[1] == Dense.Pos[1] && Fixed.Pos[5] == Dense.Pos[5]);
+    }
+
+    // A connected output need not be level with its own node's input (e.g. Branch False).
+    {
+        FProblem Chain;
+        Chain.Shapes = {Event(200.0f), Exec(200.0f, 44.0f, 0, 2), Exec(200.0f, 60.0f), Exec(200.0f, 44.0f)};
+        Chain.Shapes[1].ExecOut[1] = 76.0f;
+        Chain.Links = {{0, 0, 1, 0, true}, {1, 1, 2, 0, true}, {2, 0, 3, 0, true}};
+        Chain.Free.Init(true, 4);
+        Chain.Pos.Init(FVector2D::ZeroVector, 4);
+        const FSolution Out = McpRuled::Solve(Chain, Params);
+        TestEqual(TEXT("the receiver matches the connected False pin"), Out.Pos[2].Y + 60.0, Out.Pos[1].Y + 76.0, 1e-3);
+        TestEqual(TEXT("the next edge inherits that row height"), Out.Pos[3].Y + 44.0, Out.Pos[2].Y + 60.0, 1e-3);
     }
 
     // Ten 300-wide nodes with rows at most 1500 wide: broken twice, each break two reroutes between the rows.
@@ -309,6 +328,69 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("reroute A right of the row it leaves"), First.A.X > Out.Pos[3].X + 300.0);
             TestTrue(TEXT("reroute B left of the row it enters"), First.B.X < Out.Pos[4].X);
             TestTrue(TEXT("both in the gap between the rows"), First.A.Y == First.B.Y && First.A.Y > Out.Pos[3].Y + 67.0 && First.A.Y < Out.Pos[4].Y);
+        }
+    }
+    // A loop's terminal completion must not sit to the left of its already placed body.
+    {
+        FProblem Loop;
+        FShape Terminal = Exec(180.0f, 44.0f, 1, 0);
+        Loop.Shapes = {Event(180.0f), Exec(240.0f, 44.0f, 0, 2), Exec(260.0f, 44.0f),
+                       Exec(260.0f, 44.0f), Terminal};
+        Loop.Links = {{0, 0, 1, 0, true}, {1, 0, 2, 0, true}, {2, 0, 3, 0, true}, {1, 1, 4, 0, true}};
+        Loop.Free.Init(true, 5);
+        Loop.Pos.Init(FVector2D::ZeroVector, 5);
+        const FSolution Out = McpRuled::Solve(Loop, Params);
+        TestTrue(TEXT("terminal completion is right of the loop body, not back inside it"),
+            Out.Pos[4].X >= Out.Pos[3].X + Loop.Shapes[3].Width + Params.ExecGap - 1.0f);
+        TestTrue(TEXT("terminal is below its execution body, leaving a bottom completion lane"),
+            Out.Pos[4].Y >= Out.Pos[3].Y + Loop.Shapes[3].Height + Params.RowGap - 1.0f);
+        TestEqual(TEXT("completion has an explicit two-point route"), Out.Breaks.Num(), 1);
+
+    }
+    // A calculation reading a loop Index must not be tucked under the loop, to its left.
+    {
+        FProblem IndexFlow;
+        FShape LoopShape = Exec(240.0f, 44.0f);
+        LoopShape.DataOut.Add(96.0f);
+        IndexFlow.Shapes = {Event(180.0f), LoopShape, Exec(180.0f, 44.0f, 1), Pure(1), Pure(1)};
+        IndexFlow.Links = {{0, 0, 1, 0, true}, {1, 0, 2, 0, true}, {1, 0, 3, 0, false}, {3, 0, 4, 0, false}, {4, 0, 2, 0, false}};
+        IndexFlow.Free.Init(true, 5);
+        IndexFlow.Pos.Init(FVector2D::ZeroVector, 5);
+        const FSolution Out = McpRuled::Solve(IndexFlow, Params);
+        TestTrue(TEXT("Index calculation follows its exec producer left to right"),
+            Out.Pos[3].X >= Out.Pos[1].X + LoopShape.Width + Params.DataGap - 1.0f);
+    }
+    // Partial arrangement keeps the loop fixed but must still respect the origin of its Index value.
+    {
+        FProblem FixedIndex;
+        FShape LoopShape = Exec(240.0f, 44.0f);
+        LoopShape.DataOut.Add(96.0f);
+        FixedIndex.Shapes = {LoopShape, Exec(180.0f, 44.0f, 1), Pure(1), Pure(1)};
+        FixedIndex.Links = {{0, 0, 1, 0, true}, {0, 0, 2, 0, false}, {2, 0, 3, 0, false}, {3, 0, 1, 0, false}};
+        FixedIndex.Free = {false, true, true, true};
+        FixedIndex.Pos.Init(FVector2D::ZeroVector, 4);
+        FixedIndex.Pos[0] = FVector2D(1000.0, 0.0);
+        McpRuled::FParams FixedParams;
+        FixedParams.bAllowMovingExisting = false;
+        const FSolution Out = McpRuled::Solve(FixedIndex, FixedParams);
+        TestTrue(TEXT("unselected Index producer stays fixed"), Out.Pos[0] == FixedIndex.Pos[0]);
+        TestTrue(TEXT("Index computation follows its fixed producer"),
+            Out.Pos[2].X >= 1000.0 + LoopShape.Width + FixedParams.DataGap - 1.0f);
+    }
+    // An early exit shares a result with a loop in a later lower row (the distance-sort fixture).
+    {
+        FProblem Early;
+        FShape Return = Exec(180.0f, 44.0f, 0, 0);
+        Early.Shapes = {Event(180.0f), Exec(180.0f, 44.0f, 0, 2), Exec(240.0f, 44.0f, 0, 2),
+                        Exec(240.0f, 44.0f), Exec(240.0f, 44.0f), Return};
+        Early.Links = {{0,0,1,0,true},{1,0,2,0,true},{1,1,5,0,true},{2,0,3,0,true},{2,1,4,0,true},{4,0,5,0,true}};
+        Early.Free.Init(true, 6);
+        Early.Pos.Init(FVector2D::ZeroVector, 6);
+        const FSolution Out = McpRuled::Solve(Early, Params);
+        for (int32 Other = 0; Other < 5; ++Other)
+        {
+            TestTrue(TEXT("shared early-exit return clears every later body row"),
+                Out.Pos[5].Y >= Out.Pos[Other].Y + Early.Shapes[Other].Height + Params.RowGap - 1.0f);
         }
     }
     return true;

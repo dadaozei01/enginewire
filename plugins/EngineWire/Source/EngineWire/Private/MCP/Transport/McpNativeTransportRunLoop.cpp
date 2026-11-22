@@ -1,4 +1,5 @@
 #include "MCP/Transport/McpNativeTransportPrivate.h"
+#include "Transport/McpListenSocket.h"
 
 bool FMcpNativeTransport::SendAllBytes(FSocket* Socket, const uint8* Data, int32 Length)
 {
@@ -82,7 +83,6 @@ uint32 FMcpNativeTransport::Run()
 		return FailBind(TEXT("Failed to create listen socket"));
 	}
 
-	ListenSocket->SetReuseAddr(true);
 	ListenSocket->SetNonBlocking(false);
 
 	TSharedRef<FInternetAddr> BindAddr = SocketSub->CreateInternetAddr();
@@ -97,13 +97,18 @@ uint32 FMcpNativeTransport::Run()
 		BindAddr->SetIp(TEXT("127.0.0.1"), bIsValid);
 	}
 
+	const FString Endpoint = BindAddr->ToString(true);
+	if (!EngineWire::ConfigureListenSocket(*ListenSocket))
+	{
+		return FailBind(FString::Printf(TEXT("HTTP listener could not configure socket for %s"), *Endpoint));
+	}
 	if (!ListenSocket->Bind(*BindAddr))
 	{
-		return FailBind(FString::Printf(TEXT("Failed to bind to %s:%d"), *ListenHost, ListenPort));
+		return FailBind(FString::Printf(TEXT("HTTP listener failed to bind to %s"), *Endpoint));
 	}
 	if (!ListenSocket->Listen(5))
 	{
-		return FailBind(TEXT("Failed to listen on socket"));
+		return FailBind(FString::Printf(TEXT("HTTP listener failed to listen on %s"), *Endpoint));
 	}
 
 	// Signal Start() that bind/listen succeeded
