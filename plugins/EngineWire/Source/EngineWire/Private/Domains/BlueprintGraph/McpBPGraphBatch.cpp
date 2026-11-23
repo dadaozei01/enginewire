@@ -254,7 +254,10 @@ bool RunGraphBatch(FActionContext& Context, int32 MaxSteps, bool bCompile)
         return true;
     }
 
-    LayoutAutoPlacedNodes(Context.Blueprint, State);
+    if (GetJsonBoolField(Context.Payload, TEXT("autoLayout"), true))
+    {
+        LayoutAutoPlacedNodes(Context.Blueprint, State);
+    }
     TSharedPtr<FJsonObject> Result = McpHandlerUtils::CreateResultObject();
     McpSetBatchSteps(Result, Results, NodeIds);
     Result->SetNumberField(TEXT("succeeded"), Results.Num());

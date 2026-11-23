@@ -61,7 +61,7 @@ TSharedPtr<FJsonObject> BuildStepPayload(const TSharedPtr<FJsonObject>& Batch,
     TSharedPtr<FJsonObject> Out = MakeShared<FJsonObject>();
     for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Batch->Values)
     {
-        if (Pair.Key != TEXT("operations") && Pair.Key != TEXT("graphName"))
+        if (Pair.Key != TEXT("operations") && Pair.Key != TEXT("graphName") && Pair.Key != TEXT("autoLayout"))
         {
             Out->SetField(Pair.Key, Pair.Value);
         }

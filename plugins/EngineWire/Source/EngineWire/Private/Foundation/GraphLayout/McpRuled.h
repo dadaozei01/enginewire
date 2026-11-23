@@ -65,6 +65,10 @@ struct FParams
     float MaxSharedGetSpan = 768.0f;
     /** Batch insertion may make room; arrange_nodes keeps unlisted nodes fixed. */
     bool bAllowMovingExisting = true;
+    /** When true and bAllowMovingExisting is set, try a short horizontal slide past narrow untouched neighbors
+     *  before pushing lower regions down (keeps narrow unused ghost events fixed while preventing wide lower
+     *  events from dropping a rewritten body off its entry line). */
+    bool bPreferSlideBeforePush = false;
     /** Clear space between two exec nodes of a row. */
     float ExecGap = 96.0f;
     /** Clear space between a data producer and its reader. */

@@ -1,4 +1,5 @@
 #include "Domains/BlueprintGraph/Code/McpGraphCodeWrite.h"
+#include "Domains/BlueprintGraph/McpBPGraphBatchSteps.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Dom/JsonObject.h"
@@ -424,6 +425,160 @@ bool FMcpGraphCodeWriteLayoutTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("form row node count includes auto-inserted conversion node"), ReportedNodes, Made.Num());
         }
         TestEqual(TEXT("no overlapping nodes in conversion function graph"), CountOverlaps(FuncGraph), 0);
+    }
+
+    // 6. Multi-round EventGraph edits (no-ID full rewrite of an event above a wide sibling event, kept-ID
+    //    in-chain insertion, and topology-only rewire via batch LayoutAutoPlacedNodes):
+    //    - Rewritten event stays level with its entry and wholly above the wide sibling event (no 2,000px drop).
+    //    - Rewiring misaligned existing nodes via batch snaps the downstream segment + exclusive pure inputs back
+    //      onto the entry line while leaving unrelated events untouched.
+    {
+        UBlueprint* BP = MakeActorBlueprint(TEXT("CodeWrite_MultiRoundCohesiveAndBatchRewire"));
+        UEdGraph* Graph = EventGraphOf(BP);
+        UK2Node_Event* Tick = FindEventByFunction(Graph, TEXT("ReceiveTick"));
+        if (!TestTrue(TEXT("multi-round blueprint has EventGraph and Tick"), Graph && Tick)) { return false; }
+
+        // Seed UpdateStone, wide UpdateStoneShake below it, and a distant untouched ManualBypass event.
+        TMap<UEdGraphNode*, int32> SeedMade;
+        TArray<TSharedPtr<FJsonValue>> SeedRows;
+        int32 SeedKept = 0;
+        FString Error;
+        const FString SeedCode = TEXT(
+            "(event Custom|UpdateStone\n"
+            "  (Development|PrintString \"seed\"))\n"
+            "(event Custom|UpdateStoneShake\n"
+            "  (Development|PrintString \"shake1\")\n"
+            "  (Development|PrintString \"shake2\")\n"
+            "  (Development|PrintString \"shake3\")\n"
+            "  (Development|PrintString \"shake4\")\n"
+            "  (Development|PrintString \"shake5\"))\n"
+            "(event Custom|ManualBypass\n"
+            "  (Development|PrintString \"manual\"))\n");
+        if (!TestTrue(*FString::Printf(TEXT("multi-round seed write succeeds (%s)"), *Error),
+                      WriteCode(BP, Graph, SeedCode, SeedMade, SeedRows, SeedKept, Error)))
+        {
+            return false;
+        }
+        auto FindCustomEvent = [Graph](const TCHAR* Name) -> UEdGraphNode*
+        {
+            for (UEdGraphNode* Node : Graph->Nodes)
+            {
+                if (!Node)
+                {
+                    continue;
+                }
+                const FString Title = Node->GetNodeTitle(ENodeTitleType::ListView).ToString();
+                if (Title.Equals(Name, ESearchCase::IgnoreCase) || Title.EndsWith(FString(TEXT(" ")) + Name, ESearchCase::IgnoreCase))
+                {
+                    return Node;
+                }
+            }
+            return nullptr;
+        };
+        UEdGraphNode* UpdateStone = FindCustomEvent(TEXT("UpdateStone"));
+        UEdGraphNode* UpdateShake = FindCustomEvent(TEXT("UpdateStoneShake"));
+        UEdGraphNode* ManualBypass = FindCustomEvent(TEXT("ManualBypass"));
+        if (!TestTrue(TEXT("all three custom events created"), UpdateStone && UpdateShake && ManualBypass))
+        {
+            return false;
+        }
+        // Park ManualBypass far to the right as a protected untouched sample.
+        const FIntPoint ManualShift(6000, 0);
+        ManualBypass->NodePosX += ManualShift.X;
+        if (UEdGraphNode* ManualCall = NextExecNode(ManualBypass))
+        {
+            ManualCall->NodePosX += ManualShift.X;
+        }
+        const FIntPoint ManualBypassPos(ManualBypass->NodePosX, ManualBypass->NodePosY);
+        const FIntPoint UpdateStonePos(UpdateStone->NodePosX, UpdateStone->NodePosY);
+
+        // Round 1: No-ID full rewrite of UpdateStone with an if/else branch + pure math while wide UpdateStoneShake sits directly below.
+        TMap<UEdGraphNode*, int32> Round1Made;
+        TArray<TSharedPtr<FJsonValue>> Round1Rows;
+        int32 Round1Kept = 0;
+        const FString Round1Code = TEXT(
+            "(event Custom|UpdateStone\n"
+            "  (if (> (+ 1.0 2.0) 1.5)\n"
+            "    (Development|PrintString \"true-a\")\n"
+            "    (else\n"
+            "      (Development|PrintString \"false-b\")))\n"
+            "  (Development|PrintString \"after\"))\n");
+        if (!TestTrue(*FString::Printf(TEXT("round 1 no-ID rewrite succeeds (%s)"), *Error),
+                      WriteCode(BP, Graph, Round1Code, Round1Made, Round1Rows, Round1Kept, Error)))
+        {
+            return false;
+        }
+        TestEqual(TEXT("UpdateStone entry kept its position"), FIntPoint(UpdateStone->NodePosX, UpdateStone->NodePosY), UpdateStonePos);
+        UEdGraphNode* FirstStoneNode = NextExecNode(UpdateStone);
+        if (TestNotNull(TEXT("UpdateStone wired to rewritten body"), FirstStoneNode))
+        {
+            TestTrue(TEXT("rewritten UpdateStone body starts level with its entry (no 2000px drop)"),
+                     FMath::IsNearlyEqual(ExecLineY(*FirstStoneNode), ExecLineY(*UpdateStone), 1.5));
+            TestTrue(TEXT("rewritten UpdateStone body sits right of entry"), FirstStoneNode->NodePosX > UpdateStone->NodePosX);
+        }
+        double StoneMaxY = UpdateStone->NodePosY;
+        for (const TPair<UEdGraphNode*, int32>& Each : Round1Made)
+        {
+            const McpRuled::FShape Shape = McpRuled::EstimateShape(*Each.Key);
+            StoneMaxY = FMath::Max(StoneMaxY, static_cast<double>(Each.Key->NodePosY) + Shape.Height);
+        }
+        TestTrue(TEXT("UpdateStoneShake was pushed cleanly below all of UpdateStone (no sandwiching)"),
+                 static_cast<double>(UpdateShake->NodePosY) >= StoneMaxY + 100.0);
+        TestEqual(TEXT("untouched ManualBypass did not move in round 1"),
+                  FIntPoint(ManualBypass->NodePosX, ManualBypass->NodePosY), ManualBypassPos);
+        TestEqual(TEXT("no overlapping nodes after round 1 rewrite"), CountOverlaps(Graph), 0);
+
+        // Round 2: Rewire misaligned existing nodes onto Tick via batch LinkChanges (no new nodes created)
+        // and verify LayoutAutoPlacedNodes pulls the rewired chain back onto Tick's white line.
+        TMap<UEdGraphNode*, int32> TickSeedMade;
+        TArray<TSharedPtr<FJsonValue>> TickSeedRows;
+        int32 TickSeedKept = 0;
+        const FString TickSeedCode = TEXT(
+            "(event EventTick (DeltaSeconds)\n"
+            "  (Development|PrintString \"ui-1\")\n"
+            "  (Development|PrintString \"ui-2\"))\n");
+        if (!TestTrue(*FString::Printf(TEXT("tick seed write succeeds (%s)"), *Error),
+                      WriteCode(BP, Graph, TickSeedCode, TickSeedMade, TickSeedRows, TickSeedKept, Error)))
+        {
+            return false;
+        }
+        UEdGraphNode* Ui1 = NextExecNode(Tick);
+        UEdGraphNode* Ui2 = Ui1 ? NextExecNode(Ui1) : nullptr;
+        if (!TestTrue(TEXT("Tick chain has Ui1 -> Ui2"), Ui1 && Ui2)) { return false; }
+
+        // Simulate severe prior vertical drift (2,200px & 4,800px below Tick).
+        const FIntPoint TickPos(Tick->NodePosX, Tick->NodePosY);
+        Ui1->NodePosY = Tick->NodePosY + 2200;
+        Ui2->NodePosY = Tick->NodePosY + 4800;
+
+        McpBlueprintGraphHandlers::GraphBatch::FBatchState BatchState;
+        for (const UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (Node) { BatchState.ExistingGuids.Add(Node->NodeGuid.ToString()); }
+        }
+        McpBlueprintGraphHandlers::GraphBatch::FBatchLinkChange RewireLink;
+        RewireLink.FromGuid = Tick->NodeGuid.ToString();
+        RewireLink.ToGuid = Ui1->NodeGuid.ToString();
+        RewireLink.bExec = true;
+        BatchState.LinkChanges.Add(RewireLink);
+
+        McpBlueprintGraphHandlers::GraphBatch::LayoutAutoPlacedNodes(BP, BatchState);
+        TestEqual(TEXT("Tick entry stayed fixed during batch rewire relayout"),
+                  FIntPoint(Tick->NodePosX, Tick->NodePosY), TickPos);
+        TestTrue(TEXT("Ui1 snapped back to Tick's white line after rewire"),
+                 FMath::IsNearlyEqual(ExecLineY(*Ui1), ExecLineY(*Tick), 1.5));
+        TestTrue(TEXT("Ui2 followed Ui1 back to Tick's white line"),
+                 FMath::IsNearlyEqual(ExecLineY(*Ui2), ExecLineY(*Tick), 1.5));
+        TestEqual(TEXT("untouched ManualBypass stayed fixed during batch rewire relayout"),
+                  FIntPoint(ManualBypass->NodePosX, ManualBypass->NodePosY), ManualBypassPos);
+        TestEqual(TEXT("no overlapping nodes after batch rewire relayout"), CountOverlaps(Graph), 0);
+
+        // Idempotency check: running LayoutAutoPlacedNodes again with the same LinkChange moves nothing.
+        const FIntPoint Ui1After(Ui1->NodePosX, Ui1->NodePosY);
+        const FIntPoint Ui2After(Ui2->NodePosX, Ui2->NodePosY);
+        McpBlueprintGraphHandlers::GraphBatch::LayoutAutoPlacedNodes(BP, BatchState);
+        TestEqual(TEXT("Ui1 position is idempotent on repeat batch layout"), FIntPoint(Ui1->NodePosX, Ui1->NodePosY), Ui1After);
+        TestEqual(TEXT("Ui2 position is idempotent on repeat batch layout"), FIntPoint(Ui2->NodePosX, Ui2->NodePosY), Ui2After);
     }
 
     return true;

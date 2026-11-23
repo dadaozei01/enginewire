@@ -957,8 +957,14 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     {
         if (Problem.Free[Node])
         {
-            Nodes[Node]->NodePosX = FMath::RoundToInt(Solution.Pos[Node].X);
-            Nodes[Node]->NodePosY = FMath::RoundToInt(Solution.Pos[Node].Y);
+            const int32 NewX = FMath::RoundToInt(Solution.Pos[Node].X);
+            const int32 NewY = FMath::RoundToInt(Solution.Pos[Node].Y);
+            if (Nodes[Node]->NodePosX != NewX || Nodes[Node]->NodePosY != NewY)
+            {
+                Nodes[Node]->Modify();
+                Nodes[Node]->NodePosX = NewX;
+                Nodes[Node]->NodePosY = NewY;
+            }
             Bottom = FMath::Max(Bottom, static_cast<float>(Solution.Pos[Node].Y + Problem.Shapes[Node].Height));
         }
         else if (!Solution.Pos[Node].Equals(Problem.Pos[Node], 0.5))

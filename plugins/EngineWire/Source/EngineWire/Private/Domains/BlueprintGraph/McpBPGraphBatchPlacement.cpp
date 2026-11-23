@@ -3,7 +3,10 @@
 #include "Foundation/BridgeHelpers/Responses/McpJsonFields.h"
 #include "Foundation/GraphLayout/McpRuled.h"
 
+#include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_K2.h"
+#include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
 
 namespace McpBlueprintGraphHandlers::GraphBatch
 {
@@ -118,6 +121,187 @@ void FollowStepGraph(const FActionContext& Parent, const TSharedPtr<FJsonObject>
         Payload->SetStringField(TEXT("graphName"), Graph);
     }
 }
+
+void RecordConnectLinkChange(UBlueprint* Blueprint, FBatchState& State,
+                             const TSharedPtr<FJsonObject>& Payload, const FMcpCapturedResponse& Reply)
+{
+    if (!Reply.bSuccess || !Reply.Result.IsValid())
+    {
+        return;
+    }
+    FString ConvGuid;
+    if (Reply.Result->TryGetStringField(TEXT("conversionNodeId"), ConvGuid) && !ConvGuid.IsEmpty() &&
+        !State.ExistingGuids.Contains(ConvGuid))
+    {
+        State.AutoPlacedGuids.AddUnique(ConvGuid);
+    }
+    const FString RawFromGuid = McpGetFirstStringField(
+        Payload, {TEXT("fromNodeId"), TEXT("fromNode"), TEXT("sourceNodeGuid"), TEXT("sourceNodeId"), TEXT("sourceNode"), TEXT("nodeId")});
+    const FString RawToGuid = McpGetFirstStringField(
+        Payload, {TEXT("toNodeId"), TEXT("toNode"), TEXT("targetNodeGuid"), TEXT("targetNodeId"), TEXT("targetNode")});
+    if (RawFromGuid.IsEmpty() || RawToGuid.IsEmpty())
+    {
+        return;
+    }
+    FString SourcePinName;
+    FString TargetPinName;
+    FString SourcePinType;
+    FString TargetPinType;
+    Reply.Result->TryGetStringField(TEXT("sourcePinName"), SourcePinName);
+    Reply.Result->TryGetStringField(TEXT("targetPinName"), TargetPinName);
+    Reply.Result->TryGetStringField(TEXT("sourcePinType"), SourcePinType);
+    Reply.Result->TryGetStringField(TEXT("targetPinType"), TargetPinType);
+
+    UEdGraphNode* FromNode = FindBatchNode(Blueprint, RawFromGuid);
+    UEdGraphNode* ToNode = FindBatchNode(Blueprint, RawToGuid);
+    if (!FromNode || !ToNode)
+    {
+        return;
+    }
+    UEdGraphPin* FromPin = FromNode->FindPin(FName(*SourcePinName));
+    UEdGraphPin* ToPin = ToNode->FindPin(FName(*TargetPinName));
+    if (FromPin && ToPin && FromPin->Direction == EGPD_Input && ToPin->Direction == EGPD_Output)
+    {
+        Swap(FromNode, ToNode);
+        Swap(FromPin, ToPin);
+    }
+    FBatchLinkChange Change;
+    Change.FromGuid = FromNode->NodeGuid.ToString();
+    Change.ToGuid = ToNode->NodeGuid.ToString();
+    Change.bExec = (FromPin && FromPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec) ||
+                   (ToPin && ToPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec) ||
+                   SourcePinType == UEdGraphSchema_K2::PC_Exec.ToString() ||
+                   TargetPinType == UEdGraphSchema_K2::PC_Exec.ToString();
+    if (Change.bExec && FromPin)
+    {
+        int32 ExecOutIndex = 0;
+        for (const UEdGraphPin* Pin : FromNode->Pins)
+        {
+            if (Pin && !Pin->bHidden && Pin->Direction == EGPD_Output && Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+            {
+                if (Pin == FromPin)
+                {
+                    Change.bSecondaryExecOut = ExecOutIndex > 0;
+                    break;
+                }
+                ++ExecOutIndex;
+            }
+        }
+    }
+    const TArray<TSharedPtr<FJsonValue>>* Replaced = nullptr;
+    if (Reply.Result->TryGetArrayField(TEXT("replacedLinks"), Replaced) && Replaced)
+    {
+        for (const TSharedPtr<FJsonValue>& Item : *Replaced)
+        {
+            const TSharedPtr<FJsonObject>* Obj = nullptr;
+            FString OldGuid;
+            if (Item.IsValid() && Item->TryGetObject(Obj) && Obj && (*Obj)->TryGetStringField(TEXT("nodeId"), OldGuid) && !OldGuid.IsEmpty())
+            {
+                Change.ReplacedGuids.AddUnique(OldGuid);
+            }
+        }
+    }
+    State.LinkChanges.Add(MoveTemp(Change));
+}
+
+bool HasVisibleExecPin(const UEdGraphNode* Node)
+{
+    if (!Node)
+    {
+        return false;
+    }
+    for (const UEdGraphPin* Pin : Node->Pins)
+    {
+        if (Pin && !Pin->bHidden && Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsExistingEntryAnchor(const UEdGraphNode* Node)
+{
+    if (!Node)
+    {
+        return false;
+    }
+    if (Node->IsA<UK2Node_Event>() || Node->IsA<UK2Node_FunctionEntry>())
+    {
+        return true;
+    }
+    bool bHasExecIn = false;
+    bool bHasExecOut = false;
+    for (const UEdGraphPin* Pin : Node->Pins)
+    {
+        if (!Pin || Pin->bHidden || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+        {
+            continue;
+        }
+        if (Pin->Direction == EGPD_Input)
+        {
+            bHasExecIn = true;
+        }
+        else
+        {
+            bHasExecOut = true;
+        }
+    }
+    return !bHasExecIn && bHasExecOut;
+}
+
+bool IsExecAligned(const UEdGraphNode* Upstream, const UEdGraphNode* Downstream)
+{
+    if (!Upstream || !Downstream)
+    {
+        return false;
+    }
+    const McpRuled::FShape UpShape = McpRuled::EstimateShape(*Upstream);
+    const McpRuled::FShape DownShape = McpRuled::EstimateShape(*Downstream);
+    const double UpLine = static_cast<double>(Upstream->NodePosY) +
+                          static_cast<double>(UpShape.ExecOut.Num() > 0 ? UpShape.ExecOut[0] : UpShape.Height * 0.5f);
+    const double DownLine = static_cast<double>(Downstream->NodePosY) +
+                            static_cast<double>(DownShape.ExecIn >= 0.0f ? DownShape.ExecIn : DownShape.Height * 0.5f);
+    const double UpRight = static_cast<double>(Upstream->NodePosX) + static_cast<double>(UpShape.Width);
+    const double DownLeft = static_cast<double>(Downstream->NodePosX);
+    return DownLeft >= UpRight - 1.0 && DownLeft <= UpRight + 640.0 && FMath::Abs(DownLine - UpLine) <= 64.0;
+}
+
+UEdGraphNode* FindUpstreamFixedExecAnchor(UEdGraphNode* StartNode, const TSet<UEdGraphNode*>& FreeNodes)
+{
+    TSet<UEdGraphNode*> Visited;
+    TArray<UEdGraphNode*> Open = {StartNode};
+    while (Open.Num() > 0)
+    {
+        UEdGraphNode* Current = Open.Pop(EAllowShrinking::No);
+        if (!Current || Visited.Contains(Current))
+        {
+            continue;
+        }
+        Visited.Add(Current);
+        for (const UEdGraphPin* Pin : Current->Pins)
+        {
+            if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+            {
+                continue;
+            }
+            for (const UEdGraphPin* Linked : Pin->LinkedTo)
+            {
+                UEdGraphNode* Pred = Linked ? Linked->GetOwningNode() : nullptr;
+                if (!Pred || Pred->GetGraph() != StartNode->GetGraph())
+                {
+                    continue;
+                }
+                if (!FreeNodes.Contains(Pred))
+                {
+                    return Pred;
+                }
+                Open.Add(Pred);
+            }
+        }
+    }
+    return nullptr;
+}
 } // namespace
 
 FMcpCapturedResponse RunStep(const FActionContext& Parent, const TSharedPtr<FJsonObject>& Payload,
@@ -199,10 +383,21 @@ FMcpCapturedResponse RunPlacedStep(const FActionContext& Parent, FBatchState& St
         Reply = RunStep(Parent, Payload, Edit, StepId, OutPins);
     }
     FString CreatedGuid;
-    if (bAuto && Reply.bSuccess && Reply.Result.IsValid() && Reply.Result->TryGetStringField(TEXT("nodeGuid"), CreatedGuid) &&
-        !State.ExistingGuids.Contains(CreatedGuid))
+    if ((bCreates || Edit == TEXT("add_event")) && Reply.bSuccess && Reply.Result.IsValid() &&
+        Reply.Result->TryGetStringField(TEXT("nodeGuid"), CreatedGuid) && !State.ExistingGuids.Contains(CreatedGuid))
     {
-        State.AutoPlacedGuids.Add(CreatedGuid);
+        if (bAuto)
+        {
+            State.AutoPlacedGuids.AddUnique(CreatedGuid);
+        }
+        else
+        {
+            State.ExplicitlyPlacedGuids.Add(CreatedGuid);
+        }
+    }
+    if (Edit == TEXT("connect_pins"))
+    {
+        RecordConnectLinkChange(Parent.Blueprint, State, Payload, Reply);
     }
     if (Moves > 0 && !bAuto && Reply.bSuccess && Reply.Result.IsValid())
     {
@@ -287,13 +482,298 @@ TArray<UEdGraphNode*> SettleAutoPlacedNodes(UBlueprint* Blueprint, const FBatchS
 
 void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
 {
-    TMap<UEdGraph*, TArray<UEdGraphNode*>> ByGraph;
+    if (!Blueprint)
+    {
+        return;
+    }
+    TSet<UEdGraphNode*> FreeNodes;
+    TArray<UEdGraphNode*> InitialOrder;
     for (const FString& Guid : State.AutoPlacedGuids)
     {
         UEdGraphNode* Node = FindBatchNode(Blueprint, Guid);
-        if (Node && Node->GetGraph())
+        if (Node && Node->GetGraph() && !FreeNodes.Contains(Node))
+        {
+            FreeNodes.Add(Node);
+            InitialOrder.Add(Node);
+        }
+    }
+    const auto IsFixedAnchor = [&State](const UEdGraphNode* Node) -> bool
+    {
+        if (!Node || Node->IsA<UEdGraphNode_Comment>())
+        {
+            return true;
+        }
+        const FString GuidStr = Node->NodeGuid.ToString();
+        if (State.ExplicitlyPlacedGuids.Contains(GuidStr))
+        {
+            return true;
+        }
+        return State.ExistingGuids.Contains(GuidStr) && IsExistingEntryAnchor(Node);
+    };
+
+    // Seed existing exec nodes that were rewired onto a new/misaligned predecessor or moved to a secondary exec pin.
+    TSet<UEdGraphNode*> SeededExistingExec;
+    for (const FBatchLinkChange& Change : State.LinkChanges)
+    {
+        if (!Change.bExec)
+        {
+            continue;
+        }
+        UEdGraphNode* FromNode = FindBatchNode(Blueprint, Change.FromGuid);
+        UEdGraphNode* ToNode = FindBatchNode(Blueprint, Change.ToGuid);
+        if (!FromNode || !ToNode || FromNode->GetGraph() != ToNode->GetGraph() || IsFixedAnchor(ToNode) ||
+            FreeNodes.Contains(ToNode))
+        {
+            continue;
+        }
+        bool bShouldReflowTarget = Change.bSecondaryExecOut;
+        if (!bShouldReflowTarget)
+        {
+            if (FreeNodes.Contains(FromNode))
+            {
+                UEdGraphNode* Anchor = FindUpstreamFixedExecAnchor(FromNode, FreeNodes);
+                bShouldReflowTarget = !Anchor || !IsExecAligned(Anchor, ToNode);
+            }
+            else
+            {
+                bShouldReflowTarget = !IsExecAligned(FromNode, ToNode);
+            }
+        }
+        if (bShouldReflowTarget)
+        {
+            SeededExistingExec.Add(ToNode);
+        }
+    }
+
+    // Expand forward along affected exec chains up to untouched merge boundaries (preserving internal diamonds).
+    if (SeededExistingExec.Num() > 0)
+    {
+        constexpr int32 MaxExpandedExec = 96;
+        TSet<UEdGraphNode*> ExpandedExec = SeededExistingExec;
+        TSet<UEdGraphNode*> VisitedExec = SeededExistingExec;
+        TArray<UEdGraphNode*> Open = SeededExistingExec.Array();
+        while (Open.Num() > 0 && ExpandedExec.Num() < MaxExpandedExec)
+        {
+            UEdGraphNode* Current = Open.Pop(EAllowShrinking::No);
+            for (const UEdGraphPin* Pin : Current->Pins)
+            {
+                if (!Pin || Pin->Direction != EGPD_Output || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+                {
+                    continue;
+                }
+                for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                {
+                    UEdGraphNode* Next = Linked ? Linked->GetOwningNode() : nullptr;
+                    if (!Next || Next->GetGraph() != Current->GetGraph() || IsFixedAnchor(Next) ||
+                        VisitedExec.Contains(Next))
+                    {
+                        continue;
+                    }
+                    VisitedExec.Add(Next);
+                    if (!FreeNodes.Contains(Next))
+                    {
+                        ExpandedExec.Add(Next);
+                    }
+                    Open.Add(Next);
+                    if (ExpandedExec.Num() >= MaxExpandedExec)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        // Prune any non-seeded node that merges an untouched external exec path so untouched branches stay anchored.
+        for (bool bPruned = true; bPruned;)
+        {
+            bPruned = false;
+            TArray<UEdGraphNode*> ToRemove;
+            for (UEdGraphNode* Node : ExpandedExec)
+            {
+                if (SeededExistingExec.Contains(Node))
+                {
+                    continue;
+                }
+                bool bHasExternalExecIn = false;
+                for (const UEdGraphPin* Pin : Node->Pins)
+                {
+                    if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+                    {
+                        continue;
+                    }
+                    for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                    {
+                        UEdGraphNode* Pred = Linked ? Linked->GetOwningNode() : nullptr;
+                        if (Pred && Pred->GetGraph() == Node->GetGraph() && !FreeNodes.Contains(Pred) &&
+                            !ExpandedExec.Contains(Pred))
+                        {
+                            bHasExternalExecIn = true;
+                            break;
+                        }
+                    }
+                    if (bHasExternalExecIn)
+                    {
+                        break;
+                    }
+                }
+                if (bHasExternalExecIn)
+                {
+                    ToRemove.Add(Node);
+                }
+            }
+            for (UEdGraphNode* Node : ToRemove)
+            {
+                ExpandedExec.Remove(Node);
+                bPruned = true;
+            }
+        }
+        FreeNodes.Append(ExpandedExec);
+    }
+
+    // Seed misplaced exclusive pure data producers directly wired into an existing fixed node.
+    for (const FBatchLinkChange& Change : State.LinkChanges)
+    {
+        if (Change.bExec)
+        {
+            continue;
+        }
+        UEdGraphNode* FromNode = FindBatchNode(Blueprint, Change.FromGuid);
+        UEdGraphNode* ToNode = FindBatchNode(Blueprint, Change.ToGuid);
+        if (!FromNode || !ToNode || FromNode->GetGraph() != ToNode->GetGraph() || HasVisibleExecPin(FromNode) ||
+            IsFixedAnchor(FromNode) || FreeNodes.Contains(FromNode))
+        {
+            continue;
+        }
+        bool bExclusiveToTargetOrFree = false;
+        bool bSharedOutside = false;
+        for (const UEdGraphPin* Pin : FromNode->Pins)
+        {
+            if (!Pin || Pin->Direction != EGPD_Output || Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+            {
+                continue;
+            }
+            for (const UEdGraphPin* Linked : Pin->LinkedTo)
+            {
+                UEdGraphNode* Consumer = Linked ? Linked->GetOwningNode() : nullptr;
+                if (!Consumer)
+                {
+                    continue;
+                }
+                if (Consumer == ToNode || FreeNodes.Contains(Consumer))
+                {
+                    bExclusiveToTargetOrFree = true;
+                }
+                else
+                {
+                    bSharedOutside = true;
+                    break;
+                }
+            }
+            if (bSharedOutside)
+            {
+                break;
+            }
+        }
+        const bool bMisplaced = FromNode->NodePosX >= ToNode->NodePosX ||
+                                (ToNode->NodePosX - FromNode->NodePosX) > 800 ||
+                                FMath::Abs(FromNode->NodePosY - ToNode->NodePosY) > 320;
+        if (bExclusiveToTargetOrFree && !bSharedOutside && bMisplaced)
+        {
+            FreeNodes.Add(FromNode);
+        }
+    }
+
+    // Pull in exclusive pure data upstream feeding any node in FreeNodes (never moving nodes shared with untouched consumers).
+    for (bool bGrew = true; bGrew;)
+    {
+        bGrew = false;
+        TArray<UEdGraphNode*> Candidates;
+        for (UEdGraphNode* Node : FreeNodes)
+        {
+            for (const UEdGraphPin* Pin : Node->Pins)
+            {
+                if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+                {
+                    continue;
+                }
+                for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                {
+                    UEdGraphNode* Producer = Linked ? Linked->GetOwningNode() : nullptr;
+                    if (!Producer || Producer->GetGraph() != Node->GetGraph() || HasVisibleExecPin(Producer) ||
+                        IsFixedAnchor(Producer) || FreeNodes.Contains(Producer))
+                    {
+                        continue;
+                    }
+                    bool bHasOutput = false;
+                    bool bSharedOutside = false;
+                    for (const UEdGraphPin* OutPin : Producer->Pins)
+                    {
+                        if (!OutPin || OutPin->Direction != EGPD_Output || OutPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+                        {
+                            continue;
+                        }
+                        for (const UEdGraphPin* OutLink : OutPin->LinkedTo)
+                        {
+                            UEdGraphNode* Reader = OutLink ? OutLink->GetOwningNode() : nullptr;
+                            if (!Reader)
+                            {
+                                continue;
+                            }
+                            bHasOutput = true;
+                            if (!FreeNodes.Contains(Reader))
+                            {
+                                bSharedOutside = true;
+                                break;
+                            }
+                        }
+                        if (bSharedOutside)
+                        {
+                            break;
+                        }
+                    }
+                    if (bHasOutput && !bSharedOutside)
+                    {
+                        Candidates.AddUnique(Producer);
+                    }
+                }
+            }
+        }
+        for (UEdGraphNode* Producer : Candidates)
+        {
+            FreeNodes.Add(Producer);
+            bGrew = true;
+        }
+    }
+
+    if (FreeNodes.Num() == 0)
+    {
+        return;
+    }
+
+    TMap<UEdGraph*, TArray<UEdGraphNode*>> ByGraph;
+    TSet<UEdGraphNode*> Added;
+    for (UEdGraphNode* Node : InitialOrder)
+    {
+        if (Node && Node->GetGraph() && FreeNodes.Contains(Node) && !Added.Contains(Node))
         {
             ByGraph.FindOrAdd(Node->GetGraph()).Add(Node);
+            Added.Add(Node);
+        }
+    }
+    TArray<UEdGraph*> AllGraphs;
+    Blueprint->GetAllGraphs(AllGraphs);
+    for (UEdGraph* Graph : AllGraphs)
+    {
+        if (!Graph)
+        {
+            continue;
+        }
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (Node && FreeNodes.Contains(Node) && !Added.Contains(Node))
+            {
+                ByGraph.FindOrAdd(Graph).Add(Node);
+                Added.Add(Node);
+            }
         }
     }
     for (const TPair<UEdGraph*, TArray<UEdGraphNode*>>& Each : ByGraph)
