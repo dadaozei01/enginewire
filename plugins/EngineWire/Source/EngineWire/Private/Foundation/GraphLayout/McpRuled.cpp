@@ -1247,16 +1247,28 @@ private:
             Row.Add(Node);
             PrevRight = X + Shape.Width;
             // The first exec output still to place goes on in this row; the others start rows of their own.
+            // If an earlier exec output already goes to a fixed/done node (e.g. inserting a Branch whose True pin
+            // continues into an existing fixed node while False goes to a new node), do not hijack False onto the
+            // primary row: end this row here so MakeRoom shifts the fixed continuation right and False drops below.
             int32 Next = INDEX_NONE;
             int32 NextLink = INDEX_NONE;
+            bool bPrimaryExecTaken = false;
             for (const int32 Link : Out[Node])
             {
                 const FLink& Each = P.Links[Link];
-                if (!Each.bExec || Done[Each.To] || !IsFree(Each.To) || !IsExecShape(P.Shapes[Each.To]))
+                if (!Each.bExec || !IsExecShape(P.Shapes[Each.To]))
                 {
                     continue;
                 }
-                if (Next == INDEX_NONE)
+                if (Done[Each.To] || !IsFree(Each.To))
+                {
+                    if (Next == INDEX_NONE)
+                    {
+                        bPrimaryExecTaken = true;
+                    }
+                    continue;
+                }
+                if (Next == INDEX_NONE && !bPrimaryExecTaken)
                 {
                     Next = Each.To;
                     NextLink = Link;

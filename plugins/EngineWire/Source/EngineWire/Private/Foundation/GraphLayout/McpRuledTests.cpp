@@ -528,6 +528,28 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("EventB was pushed below EventA's body"),
             Out.Pos[4].Y >= Out.Pos[3].Y + Sandwich.Shapes[3].Height + RewriteParams.RegionGap - 1.0);
     }
+    // Inserting a Branch with a new False arm between two fixed exec nodes (A -> new Branch(True->B, False->new False)):
+    // Branch must sit between A and B (shifting B right), while False drops to its own row below instead of hijacking Row 1.
+    {
+        FProblem InsertBranch;
+        // 0: Fixed A at (0, 0)
+        // 1: Fixed B at (296, 0)
+        // 2: Free Branch (0=True -> B, 1=False -> 3)
+        // 3: Free FalseCall
+        // 4: Free AfterB (wired from B -> 4)
+        InsertBranch.Shapes = {Exec(200.0f, 44.0f), Exec(200.0f, 44.0f), Exec(176.0f, 44.0f, 0, 2),
+                               Exec(200.0f, 44.0f), Exec(200.0f, 44.0f)};
+        InsertBranch.Links = {{0, 0, 2, 0, true}, {2, 0, 1, 0, true}, {2, 1, 3, 0, true}, {1, 0, 4, 0, true}};
+        InsertBranch.Free = {false, false, true, true, true};
+        InsertBranch.Pos = {FVector2D(0.0, 0.0), FVector2D(296.0, 0.0), FVector2D::ZeroVector, FVector2D::ZeroVector, FVector2D::ZeroVector};
+        const FSolution Out = McpRuled::Solve(InsertBranch, Params);
+        TestEqual(TEXT("inserted Branch sits directly right of A"), Out.Pos[2].X, 296.0, 1e-3);
+        TestEqual(TEXT("inserted Branch stays level with A"), Out.Pos[2].Y, 0.0, 1e-3);
+        TestTrue(TEXT("fixed B shifted right past inserted Branch"), Out.Pos[1].X >= Out.Pos[2].X + 176.0 + Params.ExecGap - 1.0);
+        TestTrue(TEXT("False arm dropped below the primary row instead of sitting beside Branch"),
+            Out.Pos[3].Y >= Out.Pos[2].Y + InsertBranch.Shapes[2].Height + Params.RowGap - 1.0);
+        TestTrue(TEXT("AfterB sits right of shifted B"), Out.Pos[4].X >= Out.Pos[1].X + 200.0 + Params.ExecGap - 1.0);
+    }
     return true;
 }
 #endif
