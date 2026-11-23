@@ -39,3 +39,4 @@ Windows 历史验证：[v0.7.0-ue58](https://github.com/dadaozei01/enginewire/re
 - [Windows 更新到最新版（给 Agent 的分步手册）](docs/windows-update.md)
 - [来源、兼容修改与验证范围](UPSTREAM.md)
 - [下次大更新待办](docs/next-update-backlog.md)
+- [修改记录](docs/修改记录.md)
