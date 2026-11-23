@@ -546,8 +546,8 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("inserted Branch sits directly right of A"), Out.Pos[2].X, 296.0, 1e-3);
         TestEqual(TEXT("inserted Branch stays level with A"), Out.Pos[2].Y, 0.0, 1e-3);
         TestTrue(TEXT("fixed B shifted right past inserted Branch"), Out.Pos[1].X >= Out.Pos[2].X + 176.0 + Params.ExecGap - 1.0);
-        TestTrue(TEXT("False arm dropped below the primary row instead of sitting beside Branch"),
-            Out.Pos[3].Y >= Out.Pos[2].Y + InsertBranch.Shapes[2].Height + Params.RowGap - 1.0);
+        TestTrue(TEXT("False arm dropped below shifted B instead of sitting beside Branch"),
+            Out.Pos[3].Y >= Out.Pos[1].Y + InsertBranch.Shapes[1].Height + Params.RowGap - 1.0);
         TestTrue(TEXT("AfterB sits right of shifted B"), Out.Pos[4].X >= Out.Pos[1].X + 200.0 + Params.ExecGap - 1.0);
     }
     return true;
