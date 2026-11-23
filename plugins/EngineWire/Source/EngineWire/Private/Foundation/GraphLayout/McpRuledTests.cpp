@@ -461,6 +461,73 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("leaf Index sits below Option1 without overlapping"), Gap12 >= Params.InputGap - 1.0);
         TestTrue(TEXT("leaf Index does not inherit Option0's giant empty vertical gap"), Gap12 < 100.0);
     }
+    // Cohesive event placement: a rewritten/expanded event with a RowBreak and a secondary Branch pushes a wide
+    // lower event down instead of splitting across it or dropping beneath it.
+    {
+        FProblem Cohesive;
+        // 0: Fixed EventA at (0, 0)
+        // 1..5: Free EventA chain (1 has Branch False -> 6; row breaks before 4 under Narrow.MaxRowWidth)
+        // 7..9: Fixed wide EventB at Y=260 spanning X=0..3000 (mimics UpdateStoneShake sitting directly below)
+        Cohesive.Shapes = {
+            Event(200.0f),
+            Exec(300.0f, 44.0f, 0, 2), Exec(300.0f, 44.0f), Exec(300.0f, 44.0f),
+            Exec(300.0f, 44.0f), Exec(300.0f, 44.0f),
+            Exec(300.0f, 44.0f),
+            Event(200.0f), Exec(1200.0f, 44.0f), Exec(1200.0f, 44.0f),
+        };
+        Cohesive.Links = {
+            {0, 0, 1, 0, true}, {1, 0, 2, 0, true}, {2, 0, 3, 0, true},
+            {3, 0, 4, 0, true}, {4, 0, 5, 0, true},
+            {1, 1, 6, 0, true},
+            {7, 0, 8, 0, true}, {8, 0, 9, 0, true},
+        };
+        Cohesive.Free = {false, true, true, true, true, true, true, false, false, false};
+        Cohesive.Pos.Init(FVector2D::ZeroVector, 10);
+        Cohesive.Pos[0] = FVector2D(0.0, 0.0);
+        Cohesive.Pos[7] = FVector2D(0.0, 260.0);
+        Cohesive.Pos[8] = FVector2D(300.0, 260.0);
+        Cohesive.Pos[9] = FVector2D(1600.0, 260.0);
+        McpRuled::FParams Narrow;
+        Narrow.MaxRowWidth = 1100.0f;
+        Narrow.bPreferSlideBeforePush = true;
+        const FSolution Out = McpRuled::Solve(Cohesive, Narrow);
+        TestEqual(TEXT("cohesive rewrite keeps Row 1 on EventA's white line"), Out.Pos[1].Y, 0.0, 1e-3);
+        TestTrue(TEXT("EventA broke onto a second row"), Out.Breaks.Num() >= 1 && Out.Pos[4].Y > Out.Pos[1].Y);
+        double EventAMaxY = 0.0;
+        for (int32 Node = 0; Node <= 6; ++Node)
+        {
+            EventAMaxY = FMath::Max(EventAMaxY, Out.Pos[Node].Y + Cohesive.Shapes[Node].Height);
+        }
+        const double EventBMinY = FMath::Min3(Out.Pos[7].Y, Out.Pos[8].Y, Out.Pos[9].Y);
+        TestTrue(TEXT("EventA stays wholly above wide EventB (no sandwiching)"),
+            EventBMinY >= EventAMaxY + Narrow.RegionGap - 1.0);
+        TestEqual(TEXT("EventB moved rigidly as one region"), Out.Pos[8].Y - Out.Pos[7].Y, 0.0, 1e-3);
+        TestEqual(TEXT("EventB tail moved rigidly as one region"), Out.Pos[9].Y - Out.Pos[7].Y, 0.0, 1e-3);
+    }
+    // Upper region slightly too close above EventA: EventA's body nudges past the upper region, then pushes
+    // wide EventB below it down instead of cascading below EventB.
+    {
+        FProblem Sandwich;
+        // 0: Fixed UpperEvent at (0, -140) spanning X=0..2500 (bottom around -73; RegionGap reaches +55)
+        // 1: Fixed UpperBody at (300, -140)
+        // 2: Fixed EventA at (0, 0)
+        // 3: Free EventA body
+        // 4..5: Fixed WideEventB at (0, 220) spanning X=0..2500 (height 600)
+        FShape TallBlock = Exec(2000.0f, 44.0f);
+        TallBlock.Height = 600.0f;
+        Sandwich.Shapes = {Event(200.0f), Exec(2000.0f, 44.0f), Event(200.0f), Exec(300.0f, 44.0f), Event(200.0f), TallBlock};
+        Sandwich.Links = {{0, 0, 1, 0, true}, {2, 0, 3, 0, true}, {4, 0, 5, 0, true}};
+        Sandwich.Free = {false, false, false, true, false, false};
+        Sandwich.Pos = {FVector2D(0.0, -140.0), FVector2D(300.0, -140.0), FVector2D(0.0, 0.0),
+                        FVector2D::ZeroVector, FVector2D(0.0, 220.0), FVector2D(300.0, 220.0)};
+        McpRuled::FParams RewriteParams;
+        RewriteParams.bPreferSlideBeforePush = true;
+        const FSolution Out = McpRuled::Solve(Sandwich, RewriteParams);
+        TestTrue(TEXT("EventA body stays near EventA instead of cascading below tall EventB"),
+            Out.Pos[3].Y < 220.0);
+        TestTrue(TEXT("EventB was pushed below EventA's body"),
+            Out.Pos[4].Y >= Out.Pos[3].Y + Sandwich.Shapes[3].Height + RewriteParams.RegionGap - 1.0);
+    }
     return true;
 }
 #endif

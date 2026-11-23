@@ -187,7 +187,23 @@ public:
             }
             if (!Want.Equals(Pos[Terminal], 0.5))
             {
-                PlaceBlock(Result, Want);
+                float TerminalPushLine = NoLine;
+                for (const int32 Link : In[Terminal])
+                {
+                    const FLink& Wire = P.Links[Link];
+                    if (Wire.bExec)
+                    {
+                        const float SourceLine = static_cast<float>(Pos[Wire.From].Y + ExecLine(P.Shapes[Wire.From]));
+                        TerminalPushLine = TerminalPushLine <= NoLine ? SourceLine : FMath::Min(TerminalPushLine, SourceLine);
+                    }
+                }
+                for (const int32 ResultNode : Result.Nodes)
+                {
+                    Done[ResultNode] = false;
+                    Settled.Remove(ResultNode);
+                }
+                RebuildPlaced();
+                PlaceBlock(Result, Want, false, TerminalPushLine, TerminalPushLine > NoLine);
             }
             TMap<int32, FVector2D> SourceExits;
             for (const int32 Link : In[Terminal])
@@ -571,6 +587,61 @@ private:
         return Need;
     }
 
+    // How far Part at At must move down to clear ONLY placed boxes of its own region.
+    float NeedDownOwnRegion(const FPart& Part, const FVector2D& At, int32 InRegion) const
+    {
+        float Need = 0.0f;
+        for (int32 Index = 0; Index < Part.Nodes.Num(); ++Index)
+        {
+            const FBox2D Box = BoxAt(Part.Nodes[Index], At + Part.At[Index]);
+            const FBox2D Grown(Box.Min - FVector2D(K.NodePad), Box.Max + FVector2D(K.NodePad));
+            for (int32 Other = 0; Other < PlacedBox.Num(); ++Other)
+            {
+                if (PlacedRegion[Other] == InRegion && Cross(Grown, PlacedBox[Other]))
+                {
+                    Need = FMath::Max(Need, static_cast<float>(PlacedBox[Other].Max.Y + K.RowGap - Box.Min.Y));
+                }
+            }
+        }
+        return Need;
+    }
+
+    // How far Part at At must move down to clear unpushable blockers: own-region boxes, unowned obstacles,
+    // and other regions whose top lies at or above PushLine.
+    float NeedDownFixed(const FPart& Part, const FVector2D& At, int32 InRegion, float PushLine) const
+    {
+        float Need = NeedDownOwnRegion(Part, At, InRegion);
+        FBox2D Extent(ForceInit);
+        for (int32 Index = 0; Index < Part.Nodes.Num(); ++Index)
+        {
+            Extent += BoxAt(Part.Nodes[Index], At + Part.At[Index]);
+        }
+        if (Extent.bIsValid && InRegion != Floating)
+        {
+            const FBox2D Grown(Extent.Min - FVector2D(K.RegionGap), Extent.Max + FVector2D(K.RegionGap));
+            for (const TPair<int32, FBox2D>& Other : RegionBox)
+            {
+                if (Other.Key != InRegion && (Other.Key < 0 || Other.Value.Min.Y <= PushLine) && Cross(Grown, Other.Value))
+                {
+                    Need = FMath::Max(Need, static_cast<float>(Other.Value.Max.Y + K.RegionGap - Extent.Min.Y));
+                }
+            }
+        }
+        return Need;
+    }
+
+    bool HasPendingFreeInRegion(int32 QueryRegion) const
+    {
+        for (int32 Node = 0; Node < Count; ++Node)
+        {
+            if (Region[Node] == QueryRegion && IsFree(Node) && !Settled.Contains(Node))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool IsPlaced(int32 Node) const
     {
         return Done[Node] && (!IsFree(Node) || Settled.Contains(Node));
@@ -701,13 +772,18 @@ private:
                 const FBox2D Before = BoxAt(Node, Pos[Node]);
                 const FBox2D After = Before.ShiftBy(FVector2D(0.0f, Down));
                 const FBox2D Near(After.Min - FVector2D(K.NodePad), After.Max + FVector2D(K.NodePad));
+                const FBox2D WasNear(Before.Min - FVector2D(K.NodePad), Before.Max + FVector2D(K.NodePad));
+                const FBox2D NearRegion(After.Min - FVector2D(K.RegionGap), After.Max + FVector2D(K.RegionGap));
+                const FBox2D WasNearRegion(Before.Min - FVector2D(K.RegionGap), Before.Max + FVector2D(K.RegionGap));
                 for (int32 Other = 0; Other < Count; ++Other)
                 {
                     if (Other != Node && IsPlaced(Other) && !InPart.Contains(Other) && !Moves(Other))
                     {
                         const FBox2D Box = BoxAt(Other, Pos[Other]);
-                        const FBox2D WasNear(Before.Min - FVector2D(K.NodePad), Before.Max + FVector2D(K.NodePad));
-                        if (Cross(Near, Box) && !Cross(WasNear, Box))
+                        const bool bNewOverlap = !Cross(Before, Box) && Cross(After, Box);
+                        const bool bNewPadHit = Cross(Near, Box) && !Cross(WasNear, Box);
+                        const bool bNewRegionHit = Region[Other] != Region[Node] && Cross(NearRegion, Box) && !Cross(WasNearRegion, Box);
+                        if (bNewOverlap || bNewPadHit || bNewRegionHit)
                         {
                             Hit = Other;
                             break;
@@ -758,45 +834,117 @@ private:
         return true;
     }
 
-    // Puts Part's local origin at Want. With Line set (a row going on from a node, or a value beside its reader) what lies
-    // below that line and is in the way moves down first (PushRoomDown). With bSlide a row that goes on from a node then
-    // keeps its white line level by moving right, when a free spot is near enough and no other region lies between.
+    // Puts Part's local origin at Want. With Line set (a row going on from a node, a value beside its reader, or a
+    // branch/row-break belonging to this region), what lies below that line and is in the way moves down (PushRoomDown)
+    // so an event stays cohesive instead of jumping below other events. With bSlide a row that goes on from a node may
+    // keep its white line level by moving right when a free spot is near enough and no other region lies between.
     // Whatever is still in the way after that moves Part down until it touches nothing (NeedDown).
-    FVector2D PlaceBlock(const FPart& Part, FVector2D Want, bool bSlide = false, float Line = NoLine)
+    FVector2D PlaceBlock(const FPart& Part, FVector2D Want, bool bSlide = false, float Line = NoLine, bool bCohesivePush = false)
     {
         constexpr float SlideStep = 32.0f;
         constexpr float MaxSlide = 1600.0f;
+        constexpr float PreferredSlideLimit = 480.0f;
         const int32 InRegion = Part.Nodes.Num() > 0 ? Region[Part.Nodes[0]] : INDEX_NONE;
         const float Left = Part.Nodes.Num() > 0 ? static_cast<float>(Want.X + Bounds(P, Part).Min.X) : static_cast<float>(Want.X);
-        if (K.bAllowMovingExisting && Line > NoLine && InRegion != Floating &&
-            NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) > 0.0f)
+
+        auto TryPushDown = [&](const FVector2D& Target, float PushLine) -> bool
         {
-            const FSnapshot Before = Save();
-            if (PushRoomDown(Part, Want, InRegion, Line) && NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) <= 0.0f)
+            if (!K.bAllowMovingExisting || PushLine <= NoLine || InRegion == Floating)
             {
-                bSlide = false;
+                return false;
+            }
+            if (NeedDown(Part, Target, InRegion, TNumericLimits<float>::Max()) <= 0.0f)
+            {
+                return true;
+            }
+            const FSnapshot Before = Save();
+            if (PushRoomDown(Part, Target, InRegion, PushLine) &&
+                NeedDown(Part, Target, InRegion, TNumericLimits<float>::Max()) <= 0.0f)
+            {
+                return true;
+            }
+            Restore(Before);
+            return false;
+        };
+
+        auto TrySlideRight = [&](float SlideLimit, bool bCheckLaneGuard) -> bool
+        {
+            if (!bSlide)
+            {
+                return false;
+            }
+            const FBox2D PartExtent = Bounds(P, Part);
+            for (float Slide = 0.0f; Slide <= SlideLimit; Slide += SlideStep)
+            {
+                const FVector2D Candidate = Want + FVector2D(Slide, 0.0f);
+                if (NeedDown(Part, Candidate, InRegion, Left) <= 0.0f)
+                {
+                    if (bCheckLaneGuard && Slide > 0.0f && PartExtent.bIsValid)
+                    {
+                        const double CandidateBottom = Candidate.Y + PartExtent.Max.Y;
+                        bool bBlocksPendingEvent = false;
+                        for (const TPair<int32, FBox2D>& Other : RegionBox)
+                        {
+                            if (Other.Key != InRegion && Other.Key >= 0 && HasPendingFreeInRegion(Other.Key) &&
+                                Other.Value.Min.Y > Line && CandidateBottom + K.RegionGap > Other.Value.Min.Y)
+                            {
+                                bBlocksPendingEvent = true;
+                                break;
+                            }
+                        }
+                        if (bBlocksPendingEvent)
+                        {
+                            return false;
+                        }
+                    }
+                    Want.X += Slide;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        bool bPlaced = NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max()) <= 0.0f;
+        if (!bPlaced && !bCohesivePush)
+        {
+            if (K.bPreferSlideBeforePush && bSlide)
+            {
+                bPlaced = TrySlideRight(PreferredSlideLimit, true) || TryPushDown(Want, Line) || TrySlideRight(MaxSlide, false);
             }
             else
             {
-                Restore(Before);
+                bPlaced = TryPushDown(Want, Line) || TrySlideRight(MaxSlide, false);
             }
         }
-        for (float Slide = 0.0f; bSlide && Slide <= MaxSlide; Slide += SlideStep)
+        if (!bPlaced && K.bAllowMovingExisting && Line > NoLine && InRegion != Floating)
         {
-            if (NeedDown(Part, Want + FVector2D(Slide, 0.0f), InRegion, Left) <= 0.0f)
+            FVector2D Cohesive = Want;
+            for (int32 Step = 0; Step < 400; ++Step)
             {
-                Want.X += Slide;
-                break;
+                const float FixedDown = NeedDownFixed(Part, Cohesive, InRegion, Line);
+                if (FixedDown <= 0.0f)
+                {
+                    break;
+                }
+                Cohesive.Y += FixedDown;
+            }
+            if (TryPushDown(Cohesive, Line))
+            {
+                Want = Cohesive;
+                bPlaced = true;
             }
         }
-        for (int32 Step = 0; Step < 400; ++Step)
+        if (!bPlaced)
         {
-            const float Down = NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max());
-            if (Down <= 0.0f)
+            for (int32 Step = 0; Step < 400; ++Step)
             {
-                break;
+                const float Down = NeedDown(Part, Want, InRegion, TNumericLimits<float>::Max());
+                if (Down <= 0.0f)
+                {
+                    break;
+                }
+                Want.Y += Down;
             }
-            Want.Y += Down;
         }
         for (int32 Index = 0; Index < Part.Nodes.Num(); ++Index)
         {
@@ -1183,7 +1331,17 @@ private:
         }
         const bool bInsert = MakeRoom(Start, Part, Row, Want);
         const bool bKeepLine = Start.Link != INDEX_NONE && !Start.bSide && !Start.bBreak;
-        const FVector2D At = PlaceBlock(Part, Want, !bInsert && bKeepLine, bKeepLine ? static_cast<float>(Want.Y) : NoLine);
+        float PushLine = NoLine;
+        if (bKeepLine)
+        {
+            PushLine = static_cast<float>(Want.Y);
+        }
+        else if (Start.Link != INDEX_NONE)
+        {
+            const int32 FromNode = P.Links[Start.Link].From;
+            PushLine = static_cast<float>(Pos[FromNode].Y + ExecLine(P.Shapes[FromNode]));
+        }
+        const FVector2D At = PlaceBlock(Part, Want, !bInsert && bKeepLine, PushLine, !bKeepLine && Start.Link != INDEX_NONE);
         if (Start.Link == INDEX_NONE)
         {
             NextRootY = FMath::Max(NextRootY, static_cast<float>(Bounds(P, Part).Max.Y + At.Y + K.RowGap));

@@ -256,8 +256,8 @@ bool BuildForms(UBlueprint* Blueprint, const TArray<FSExpr>& Forms, const TArray
     }
     // Pass 0: lay out all forms reusing existing entries together so each sees its own entry anchor cleanly without
     // sibling forms' unplaced nodes blocking it. When writing fresh bodies onto existing entries (no kept chain nodes),
-    // keep untouched events and other regions fixed and slide new calls right; when editing an existing kept chain,
-    // keep bAllowMovingExisting enabled so insertions can shift downstream nodes or push room down.
+    // prefer a short slide past narrow untouched neighbors (like default ghost events) before pushing lower regions
+    // down, so wide lower events never force a rewritten event body thousands of units below its entry.
     TArray<UEdGraphNode*> ExistingFree;
     bool bPass0HasKept = false;
     for (int32 At = 0; At < FormNodes.Num(); ++At)
@@ -285,7 +285,8 @@ bool BuildForms(UBlueprint* Blueprint, const TArray<FSExpr>& Forms, const TArray
         Ignore.Append(Unplaced);
         const FVector2D Spot = FreeSpot(Plan.Graph, Ignore);
         McpRuled::FParams ExistingParams;
-        ExistingParams.bAllowMovingExisting = bPass0HasKept;
+        ExistingParams.bAllowMovingExisting = true;
+        ExistingParams.bPreferSlideBeforePush = !bPass0HasKept;
         McpRuled::LayoutNodes(Plan.Graph, ExistingFree, &Spot, nullptr, &Ignore, ExistingParams);
     }
     // Pass 1: lay out each newly created event below the settled graph, ignoring later unplaced forms.

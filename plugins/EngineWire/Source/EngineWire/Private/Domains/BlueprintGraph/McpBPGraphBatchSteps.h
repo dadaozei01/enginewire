@@ -10,6 +10,15 @@ namespace McpBlueprintGraphHandlers::GraphBatch
 {
 constexpr int32 MaxBatchSteps = 200;
 
+struct FBatchLinkChange
+{
+    FString FromGuid;
+    FString ToGuid;
+    bool bExec = false;
+    bool bSecondaryExecOut = false;
+    TArray<FString> ReplacedGuids;
+};
+
 struct FBatchState
 {
     /** `id` of an earlier step -> the guid of the node it created. */
@@ -19,6 +28,10 @@ struct FBatchState
     int32 AutoPlaced = 0;
     /** Guids of the nodes placed on that grid, for SettleAutoPlacedNodes. */
     TArray<FString> AutoPlacedGuids;
+    /** Guids of newly created nodes whose caller explicitly gave posX/posY (kept fixed). */
+    TSet<FString> ExplicitlyPlacedGuids;
+    /** Topology changes made by connect_pins steps (new links + replaced links), for local re-layout. */
+    TArray<FBatchLinkChange> LinkChanges;
     /** Guids of every node the Blueprint held when the batch began: a create step that hands one of them back (an
      *  event the graph already has) did not make it, so the layout leaves it where it is. */
     TSet<FString> ExistingGuids;
