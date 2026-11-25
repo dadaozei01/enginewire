@@ -66,7 +66,8 @@ public:
         {
             Done[Node] = !IsFree(Node);
         }
-        // Regions: the nodes wired together, one event's or function's logic each.
+        // Regions: partition strictly by exec ownership first so shared pure variables or delegate
+        // bindings never merge unrelated events into one giant region (EW-002 / EW-005).
         Region.SetNum(Count);
         for (int32 Node = 0; Node < Count; ++Node)
         {
@@ -80,9 +81,14 @@ public:
             }
             return Node;
         };
+        bool bAnyExecNode = false;
+        for (int32 Node = 0; Node < Count; ++Node)
+        {
+            bAnyExecNode |= IsExecShape(P.Shapes[Node]);
+        }
         for (const FLink& Each : P.Links)
         {
-            if (Region.IsValidIndex(Each.From) && Region.IsValidIndex(Each.To))
+            if (Each.bExec && Region.IsValidIndex(Each.From) && Region.IsValidIndex(Each.To))
             {
                 Region[Root(Each.From)] = Root(Each.To);
             }
@@ -90,6 +96,68 @@ public:
         for (int32 Node = 0; Node < Count; ++Node)
         {
             Region[Node] = Root(Node);
+        }
+        if (bAnyExecNode)
+        {
+            // Assign pure data nodes to the first exec consumer region that reaches them via data links
+            // without merging distinct exec regions that happen to share a pure producer.
+            TArray<bool> ClaimedByExec;
+            ClaimedByExec.Init(false, Count);
+            TArray<int32> PureQueue;
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                if (IsExecShape(P.Shapes[Node]))
+                {
+                    ClaimedByExec[Node] = true;
+                    PureQueue.Add(Node);
+                }
+            }
+            for (int32 Head = 0; Head < PureQueue.Num(); ++Head)
+            {
+                const int32 Consumer = PureQueue[Head];
+                for (const int32 Link : In[Consumer])
+                {
+                    const FLink& Each = P.Links[Link];
+                    if (Each.bExec || Each.bDelegate || ClaimedByExec[Each.From] || IsExecShape(P.Shapes[Each.From]))
+                    {
+                        continue;
+                    }
+                    ClaimedByExec[Each.From] = true;
+                    Region[Each.From] = Region[Consumer];
+                    PureQueue.Add(Each.From);
+                }
+            }
+            // Group remaining unconsumed (dead) pure nodes among themselves.
+            for (const FLink& Each : P.Links)
+            {
+                if (!Each.bExec && !Each.bDelegate && Region.IsValidIndex(Each.From) && Region.IsValidIndex(Each.To) &&
+                    !ClaimedByExec[Each.From] && !ClaimedByExec[Each.To])
+                {
+                    Region[Root(Each.From)] = Root(Each.To);
+                }
+            }
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                if (!ClaimedByExec[Node])
+                {
+                    Region[Node] = Root(Node);
+                }
+            }
+        }
+        else
+        {
+            // Pure-only graph: union non-delegate data links as before.
+            for (const FLink& Each : P.Links)
+            {
+                if (!Each.bDelegate && Region.IsValidIndex(Each.From) && Region.IsValidIndex(Each.To))
+                {
+                    Region[Root(Each.From)] = Root(Each.To);
+                }
+            }
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                Region[Node] = Root(Node);
+            }
         }
         ObstacleAt = P.Obstacles;
         RebuildPlaced();
@@ -106,14 +174,28 @@ public:
                 Queue.Add({Each.To, Link, false});
             }
         }
+        TArray<FStart> DelegateRoots;
         for (int32 Node = 0; Node < Count; ++Node)
         {
             if (IsFree(Node) && IsExecShape(P.Shapes[Node]) &&
                 !In[Node].ContainsByPredicate([this](int32 Link) { return P.Links[Link].bExec; }))
             {
-                Queue.Add({Node, INDEX_NONE, false});
+                const bool bIsDelegateCallback =
+                    Out[Node].ContainsByPredicate([this](int32 Link) { return P.Links[Link].bDelegate; }) ||
+                    In[Node].ContainsByPredicate([this](int32 Link) { return P.Links[Link].bDelegate; });
+                if (bIsDelegateCallback)
+                {
+                    DelegateRoots.Add({Node, INDEX_NONE, false});
+                }
+                else
+                {
+                    Queue.Add({Node, INDEX_NONE, false});
+                }
             }
         }
+        // Schedule delegate callback events after regular roots/continuations so their BindEvent partner
+        // is already placed and can provide a local spatial anchor (EW-005).
+        Queue.Append(DelegateRoots);
         NextRootY = P.Origin.Y;
         Drain();
         // An exec node reached only round a loop of free nodes: the loop starts at it.
@@ -221,6 +303,10 @@ public:
                 Route.B = FVector2D(X, Pos[Terminal].Y + P.Shapes[Terminal].ExecIn);
                 Breaks.Add(Route);
             }
+        }
+        if (K.bRouteBackwardExecs)
+        {
+            RouteBackwardExecEdges();
         }
         return FSolution{Pos, Breaks};
     }
@@ -666,6 +752,25 @@ private:
         RebuildPlaced();
     }
 
+    bool IsInsideLockedObstacle(int32 Node) const
+    {
+        if (!IsPlaced(Node))
+        {
+            return false;
+        }
+        const FBox2D Box = BoxAt(Node, Pos[Node]);
+        const FVector2D Center = Box.GetCenter();
+        for (int32 Index = 0; Index < ObstacleAt.Num(); ++Index)
+        {
+            const int32 Owner = P.ObstacleOwner.IsValidIndex(Index) ? P.ObstacleOwner[Index] : INDEX_NONE;
+            if (Owner == INDEX_NONE && ObstacleAt[Index].IsInsideOrOn(Center))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Makes room for Part at Want the way a person does: what lies below Line (the row's white line, or the top of the
     // reader a value block goes beside) and is in the way moves down, so the new nodes keep their line. Every node of
     // the part's own region whose top is below the highest node in the way moves down by one amount, so that region keeps
@@ -807,6 +912,10 @@ private:
         {
             if (Moves(Node))
             {
+                if (IsInsideLockedObstacle(Node))
+                {
+                    return false;
+                }
                 Moved.Add(Node);
             }
         }
@@ -970,15 +1079,38 @@ private:
             return false;
         }
         const int32 From = P.Links[Start.Link].From;
+        const float FromLineY = static_cast<float>(Pos[From].Y + ExecLine(P.Shapes[From]));
         int32 Next = INDEX_NONE;
         for (const int32 Link : Out[Row.Last()])
         {
             const FLink& Each = P.Links[Link];
-            if (Each.bExec && !IsFree(Each.To) && Region[Each.To] == Region[From] && Pos[Each.To].X > Pos[From].X)
+            if (!Each.bExec || IsFree(Each.To) || Region[Each.To] != Region[From] || Pos[Each.To].X <= Pos[From].X)
             {
-                Next = Each.To;
-                break;
+                continue;
             }
+            // Only treat as an inline same-row insert if Next is roughly on the same row, not inside a locked
+            // comment box, and not an existing multi-entry merge point (EW-007).
+            const float NextLineY = static_cast<float>(Pos[Each.To].Y + ExecLine(P.Shapes[Each.To]));
+            if (FMath::Abs(NextLineY - FromLineY) > 160.0f || IsInsideLockedObstacle(Each.To))
+            {
+                continue;
+            }
+            bool bMultiEntryMerge = false;
+            for (const int32 InLink : In[Each.To])
+            {
+                const FLink& InWire = P.Links[InLink];
+                if (InWire.bExec && InWire.From != Row.Last() && !Part.Nodes.Contains(InWire.From))
+                {
+                    bMultiEntryMerge = true;
+                    break;
+                }
+            }
+            if (bMultiEntryMerge)
+            {
+                continue;
+            }
+            Next = Each.To;
+            break;
         }
         if (Next == INDEX_NONE)
         {
@@ -1062,6 +1194,13 @@ private:
             }
             for (const int32 Node : Shift)
             {
+                if (IsInsideLockedObstacle(Node))
+                {
+                    return false;
+                }
+            }
+            for (const int32 Node : Shift)
+            {
                 Pos[Node].X += Need;
             }
             for (int32 Index = 0; Index < ObstacleAt.Num(); ++Index)
@@ -1085,7 +1224,7 @@ private:
             Queue.RemoveAt(0);
             if (!Done[Start.Node])
             {
-                if (Start.Link == INDEX_NONE && Floating == INDEX_NONE)
+                if (Start.Link == INDEX_NONE && Floating == INDEX_NONE && !RegionBox.Contains(Region[Start.Node]))
                 {
                     Floating = Region[Start.Node];
                     FloatingNodes.Reset();
@@ -1284,7 +1423,101 @@ private:
         Branches.RemoveAll([&Row](const FStart& Each) { return Row.Contains(Each.Node); });
 
         FVector2D Want(P.Origin.X, NextRootY);
-        if (Start.Link != INDEX_NONE)
+        if (Start.Link == INDEX_NONE)
+        {
+            // Delegate callback affinity (EW-005): place a floating CustomEvent near its BindEvent partner
+            // (and balanced against any fixed downstream exec merge target) instead of dumping it at Origin.
+            int32 BindPartner = INDEX_NONE;
+            for (const int32 Link : Out[Start.Node])
+            {
+                const FLink& Each = P.Links[Link];
+                if (Each.bDelegate && IsPlaced(Each.To))
+                {
+                    BindPartner = Each.To;
+                    break;
+                }
+            }
+            if (BindPartner == INDEX_NONE)
+            {
+                for (const int32 Link : In[Start.Node])
+                {
+                    const FLink& Each = P.Links[Link];
+                    if (Each.bDelegate && IsPlaced(Each.From))
+                    {
+                        BindPartner = Each.From;
+                        break;
+                    }
+                }
+            }
+            if (BindPartner != INDEX_NONE)
+            {
+                double AnchorX = Pos[BindPartner].X;
+                double AnchorY = Pos[BindPartner].Y + P.Shapes[BindPartner].Height + K.RegionGap;
+                // If this callback row directly feeds an already-placed merge node, keep its right edge
+                // strictly left of that merge target so the merge wire stays forward (never overshoots into a U-turn).
+                if (Row.Num() > 0)
+                {
+                    for (const int32 Link : Out[Row.Last()])
+                    {
+                        const FLink& Each = P.Links[Link];
+                        if (Each.bExec && IsPlaced(Each.To) && !Part.Nodes.Contains(Each.To))
+                        {
+                            const FBox2D PartBounds = Bounds(P, Part);
+                            const double ChainLeftOffset = PartBounds.bIsValid ? FMath::Min(0.0, PartBounds.Min.X) : 0.0;
+                            const double MinWantX = P.Origin.X - ChainLeftOffset;
+                            const double IdealLeftOfTarget = Pos[Each.To].X - PartBounds.Max.X - K.ExecGap;
+                            AnchorX = FMath::Max(MinWantX, FMath::Min(AnchorX, IdealLeftOfTarget));
+                            break;
+                        }
+                    }
+                }
+                Want = FVector2D(AnchorX, AnchorY);
+            }
+            else if (Row.Num() > 0)
+            {
+                // Stage 2.1 (EW-002 / EW-005): if a secondary entry chain flows into an already-placed
+                // shared merge node M, align it immediately left of M on the first free row below M
+                // (clamped to LeftX = P.Origin.X). Fall back to flush-left if pushed > 2 row heights below M.
+                int32 MergeTarget = INDEX_NONE;
+                for (const int32 Link : Out[Row.Last()])
+                {
+                    const FLink& Each = P.Links[Link];
+                    if (Each.bExec && IsPlaced(Each.To) && !Part.Nodes.Contains(Each.To))
+                    {
+                        MergeTarget = Each.To;
+                        break;
+                    }
+                }
+                if (MergeTarget != INDEX_NONE)
+                {
+                    const FBox2D PartBounds = Bounds(P, Part);
+                    const double ChainRight = PartBounds.bIsValid ? PartBounds.Max.X : static_cast<double>(PrevRight);
+                    const double ChainLeftOffset = PartBounds.bIsValid ? FMath::Min(0.0, PartBounds.Min.X) : 0.0;
+                    const double MinWantX = P.Origin.X - ChainLeftOffset;
+                    const double TargetX = FMath::Max(MinWantX, Pos[MergeTarget].X - K.ExecGap - ChainRight);
+                    const double TargetY = Pos[MergeTarget].Y + P.Shapes[MergeTarget].Height + K.RowGap -
+                                           (PartBounds.bIsValid ? PartBounds.Min.Y : 0.0);
+                    FVector2D Candidate(TargetX, TargetY);
+                    const int32 InRegion = Region[Start.Node];
+                    for (int32 Step = 0; Step < 400; ++Step)
+                    {
+                        const float Down = NeedDown(Part, Candidate, InRegion, TNumericLimits<float>::Max());
+                        if (Down <= 0.0f)
+                        {
+                            break;
+                        }
+                        Candidate.Y += Down;
+                    }
+                    const double RowHeight = FMath::Max(static_cast<double>(P.Shapes[MergeTarget].Height),
+                                                        PartBounds.bIsValid ? PartBounds.GetSize().Y : 120.0) + K.RowGap;
+                    if (Candidate.Y <= Pos[MergeTarget].Y + 2.0 * RowHeight)
+                    {
+                        Want = Candidate;
+                    }
+                }
+            }
+        }
+        else if (Start.Link != INDEX_NONE)
         {
             const FLink& From = P.Links[Start.Link];
             const FShape& Source = P.Shapes[From.From];
@@ -1425,6 +1658,244 @@ private:
         if (!bBeside)
         {
             NextRootY = FMath::Max(NextRootY, static_cast<float>(Bounds(P, Part).Max.Y + At.Y + K.RowGap));
+        }
+    }
+
+    // Route leftward / looping exec wires (e.g. Delay re-fire back to an earlier Branch) through a clear
+    // outer horizontal corridor below all intervening nodes (including pure data sub-rows) and comment obstacles,
+    // staggering parallel return lanes in the same region from right to left by +32 (EW-002).
+    void RouteBackwardExecEdges()
+    {
+        TSet<int32> AlreadyRouted;
+        for (const FRowBreak& Existing : Breaks)
+        {
+            AlreadyRouted.Add(Existing.Link);
+        }
+        TArray<FBox2D> KnotBoxes;
+        for (const FRowBreak& Existing : Breaks)
+        {
+            for (const FVector2D& Pt : {Existing.A, Existing.B})
+            {
+                const FVector2D At(FMath::RoundToInt(Pt.X - 16.0), FMath::RoundToInt(Pt.Y - 12.0));
+                KnotBoxes.Emplace(At, At + FVector2D(32.0, 24.0));
+            }
+        }
+        auto IsKnotPointFree = [&](const FVector2D& Centre) -> bool
+        {
+            const FVector2D At(FMath::RoundToInt(Centre.X - 16.0), FMath::RoundToInt(Centre.Y - 12.0));
+            const FBox2D Candidate(At - FVector2D(4.0, 4.0), At + FVector2D(36.0, 28.0));
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                if (IsPlaced(Node) && Cross(Candidate, BoxAt(Node, Pos[Node])))
+                {
+                    return false;
+                }
+            }
+            for (const FBox2D& Obstacle : ObstacleAt)
+            {
+                if (Obstacle.bIsValid && Cross(Candidate, Obstacle))
+                {
+                    return false;
+                }
+            }
+            for (const FBox2D& ExistingKnot : KnotBoxes)
+            {
+                if (Cross(Candidate, ExistingKnot))
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        TArray<int32> Candidates;
+        for (int32 Link = 0; Link < P.Links.Num(); ++Link)
+        {
+            const FLink& Each = P.Links[Link];
+            if (!Each.bExec || AlreadyRouted.Contains(Link) || !IsPlaced(Each.From) || !IsPlaced(Each.To))
+            {
+                continue;
+            }
+            if (!IsFree(Each.From) && !IsFree(Each.To))
+            {
+                continue;
+            }
+            const double FromRight = Pos[Each.From].X + P.Shapes[Each.From].Width;
+            const double ToLeft = Pos[Each.To].X;
+            if (ToLeft >= FromRight - 16.0)
+            {
+                continue;
+            }
+            Candidates.Add(Link);
+        }
+        // Order per region by source X right-to-left so multiple back-edges stagger cleanly without crossing.
+        Candidates.Sort([this](int32 A, int32 B)
+        {
+            const FLink& LA = P.Links[A];
+            const FLink& LB = P.Links[B];
+            if (Region[LA.From] != Region[LB.From])
+            {
+                return Region[LA.From] < Region[LB.From];
+            }
+            const double RightA = Pos[LA.From].X + P.Shapes[LA.From].Width;
+            const double RightB = Pos[LB.From].X + P.Shapes[LB.From].Width;
+            if (!FMath::IsNearlyEqual(RightA, RightB, 0.5))
+            {
+                return RightA > RightB;
+            }
+            return A < B;
+        });
+
+        TMap<int32, int32> RegionStagger;
+        for (const int32 Link : Candidates)
+        {
+            const FLink& Each = P.Links[Link];
+            const FShape& FromShape = P.Shapes[Each.From];
+            const FShape& ToShape = P.Shapes[Each.To];
+            const double FromRight = Pos[Each.From].X + FromShape.Width;
+            const double ToLeft = Pos[Each.To].X;
+            const double HorizontalBackSpan = FromRight - ToLeft;
+            const double ExitX = FromRight + FMath::Max(32.0f, K.DataGap * 0.75f);
+            const double EnterX = ToLeft - FMath::Max(32.0f, K.DataGap * 0.75f);
+            const double MinX = FMath::Min(EnterX - 24.0, FMath::Min(ToLeft, Pos[Each.From].X));
+            const double MaxX = FMath::Max(ExitX + 24.0, FMath::Max(FromRight, Pos[Each.To].X + ToShape.Width));
+            const double MinWireY = FMath::Min(Pos[Each.From].Y, Pos[Each.To].Y) - 32.0;
+            double BandBottom = FMath::Max(Pos[Each.From].Y + FromShape.Height, Pos[Each.To].Y + ToShape.Height);
+            bool bCrossesIntervening = false;
+
+            // 1. Cover all placed nodes in the same region(s) across [MinX, MaxX], including pure data sub-rows.
+            for (int32 Other = 0; Other < Count; ++Other)
+            {
+                if (!IsPlaced(Other))
+                {
+                    continue;
+                }
+                if (Region[Other] != Region[Each.From] && Region[Other] != Region[Each.To])
+                {
+                    continue;
+                }
+                const FBox2D OtherBox = BoxAt(Other, Pos[Other]);
+                if (OtherBox.Max.X >= MinX && OtherBox.Min.X <= MaxX && OtherBox.Max.Y >= MinWireY)
+                {
+                    BandBottom = FMath::Max(BandBottom, OtherBox.Max.Y);
+                    if (Other != Each.From && Other != Each.To)
+                    {
+                        bCrossesIntervening = true;
+                    }
+                }
+            }
+
+            // 2. Iteratively expand BandBottom past any intervening placed node (any region) or comment obstacle
+            //    whose full measured box overlaps [MinX, MaxX] and reaches into the corridor band.
+            for (int32 Pass = 0; Pass < 16; ++Pass)
+            {
+                bool bExpanded = false;
+                const double ReachY = BandBottom + K.RegionGap * 0.5;
+                for (int32 Other = 0; Other < Count; ++Other)
+                {
+                    if (!IsPlaced(Other))
+                    {
+                        continue;
+                    }
+                    const FBox2D OtherBox = BoxAt(Other, Pos[Other]);
+                    if (OtherBox.Max.X >= MinX && OtherBox.Min.X <= MaxX &&
+                        OtherBox.Max.Y >= MinWireY && OtherBox.Min.Y <= ReachY)
+                    {
+                        if (Other != Each.From && Other != Each.To)
+                        {
+                            bCrossesIntervening = true;
+                        }
+                        if (OtherBox.Max.Y > BandBottom + 0.5)
+                        {
+                            BandBottom = OtherBox.Max.Y;
+                            bExpanded = true;
+                        }
+                    }
+                }
+                for (const FBox2D& Obstacle : ObstacleAt)
+                {
+                    if (!Obstacle.bIsValid)
+                    {
+                        continue;
+                    }
+                    if (Obstacle.Max.X >= MinX && Obstacle.Min.X <= MaxX &&
+                        Obstacle.Max.Y >= MinWireY && Obstacle.Min.Y <= ReachY)
+                    {
+                        bCrossesIntervening = true;
+                        if (Obstacle.Max.Y > BandBottom + 0.5)
+                        {
+                            BandBottom = Obstacle.Max.Y;
+                            bExpanded = true;
+                        }
+                    }
+                }
+                if (!bExpanded)
+                {
+                    break;
+                }
+            }
+
+            if (HorizontalBackSpan < 240.0 && !bCrossesIntervening)
+            {
+                continue;
+            }
+
+            int32& Stagger = RegionStagger.FindOrAdd(Region[Each.From]);
+            double CorridorY = BandBottom + K.RegionGap * 0.5 + Stagger * 32.0;
+            bool bFoundClear = false;
+            for (int32 Try = 0; Try < 48; ++Try)
+            {
+                const FVector2D CandA(ExitX, CorridorY);
+                const FVector2D CandB(EnterX, CorridorY);
+                if (IsKnotPointFree(CandA) && IsKnotPointFree(CandB))
+                {
+                    // Ensure the horizontal corridor segment itself clears all placed nodes and comment obstacles.
+                    const FBox2D CorridorBar(FVector2D(FMath::Min(ExitX, EnterX), CorridorY - 14.0),
+                                             FVector2D(FMath::Max(ExitX, EnterX), CorridorY + 14.0));
+                    bool bBarClear = true;
+                    for (int32 Other = 0; Other < Count; ++Other)
+                    {
+                        if (IsPlaced(Other) && Cross(CorridorBar, BoxAt(Other, Pos[Other])))
+                        {
+                            CorridorY = FMath::Max(CorridorY + 32.0, BoxAt(Other, Pos[Other]).Max.Y + 32.0);
+                            bBarClear = false;
+                            break;
+                        }
+                    }
+                    if (bBarClear)
+                    {
+                        for (const FBox2D& Obstacle : ObstacleAt)
+                        {
+                            if (Obstacle.bIsValid && Cross(CorridorBar, Obstacle))
+                            {
+                                CorridorY = FMath::Max(CorridorY + 32.0, Obstacle.Max.Y + 32.0);
+                                bBarClear = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (bBarClear)
+                    {
+                        FRowBreak Route;
+                        Route.Link = Link;
+                        Route.A = CandA;
+                        Route.B = CandB;
+                        Breaks.Add(Route);
+                        const FVector2D BoxA(FMath::RoundToInt(CandA.X - 16.0), FMath::RoundToInt(CandA.Y - 12.0));
+                        const FVector2D BoxB(FMath::RoundToInt(CandB.X - 16.0), FMath::RoundToInt(CandB.Y - 12.0));
+                        KnotBoxes.Emplace(BoxA, BoxA + FVector2D(32.0, 24.0));
+                        KnotBoxes.Emplace(BoxB, BoxB + FVector2D(32.0, 24.0));
+                        ++Stagger;
+                        bFoundClear = true;
+                        break;
+                    }
+                }
+                else
+                {
+                    CorridorY += 32.0;
+                }
+            }
+            (void)bFoundClear;
         }
     }
 };

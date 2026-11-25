@@ -212,3 +212,10 @@ Mac 编译修改（新版 Apple clang 下才暴露，不影响 Windows）：
    发现的旧问题（未改）：`control_editor simulate_input` 的 `key_tap` 在非 PIE 时松键回调对空 PlayWorld 调 `GetWorldSettings` 导致编辑器崩溃（`McpEditorInput.cpp` 第 62 行），可用 key_down + key_up 规避。
 
 本仓库不上传测试资产、私有场景、模型、专用动画、截图、认证文件或本机完整日志。
+
+30. 蓝图排版加固与 MIT `graph_layout` 整合（2026-11-24，UE 5.8.4 Mac，路线 B）：
+    - **第一刀（增量批处理止血 + 体检回执）**：
+      - `McpBPGraphBatchPlacement.cpp` 统一登记伴随节点 GUID（`nodeGuid` / `eventNodeGuid` / `resultNodeGuid`，修复 EW-005 `BindEvent` 回调留在初始坐标）；取消 `SeededExistingExec` 对既有多入口汇合的豁免并按注释框边界阻断局部扩张（修复 EW-007 批量重接拖飞旧区块与注释框脱节）；回执新增 `layoutDiagnostics`。
+      - 新增 `Foundation/GraphLayout/McpGraphLayoutDiagnostics.h/.cpp`：提供自动 `PC_Exec` 转接点标记/折叠（不触碰人工转接点与数据/Wildcard 引脚）、折叠转接点后的语义拓扑指纹校验、无消费者死纯节点分组识别（EW-003）、注释框成员归属与同步缩放、以及布局前后穿节点/穿框/逆向执行边/长委托边统计（EW-004 / EW-008）。
+      - `McpRuled.cpp` / `McpRuledNodes.cpp`：按执行链构建区域并查集（共享数据与委托边不再跨事件合并 Region，修复 EW-002）；委托回调优先就近锚定绑定节点；新增 `PC_Exec` 逆向回边外侧走廊自动绕线与平行错位（带幂等自动 Knot 清理）；支持锁定未触碰注释框与 `bPreviewOnly` 预览。
+    - **第二刀**：第二刀试验过 howaajin/graphformatter（Sugiyama），因 100+ 节点蓝图视觉不符合 UE 阅读习惯已整体撤回，未保留任何第三方代码；format_graph 默认引擎为原生 McpRuled，layered 回到原生 McpLayered 并加选区外障碍整块平移（EW-006）。

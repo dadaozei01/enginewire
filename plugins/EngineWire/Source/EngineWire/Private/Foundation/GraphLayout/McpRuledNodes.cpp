@@ -1,4 +1,5 @@
 #include "Foundation/GraphLayout/McpRuled.h"
+#include "Foundation/GraphLayout/McpGraphLayoutDiagnostics.h"
 
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
@@ -8,6 +9,7 @@
 #include "EdGraphSchema_K2.h"
 #include "K2Node.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_Knot.h"
@@ -452,7 +454,566 @@ UK2Node_Knot* MakeKnot(UEdGraph& Graph, const FVector2D& Centre)
     Knot->NodePosX = FMath::RoundToInt(Centre.X - 16.0f);
     Knot->NodePosY = FMath::RoundToInt(Centre.Y - 12.0f);
     Creator.Finalize();
+    McpGraphLayoutDiag::MarkAutoLayoutKnot(Knot);
     return Knot;
+}
+
+bool IsEmptyDefaultEvent(const UEdGraphNode* Node)
+{
+    const UK2Node_Event* Event = Cast<UK2Node_Event>(Node);
+    if (!Event || Node->IsA<UK2Node_CustomEvent>())
+    {
+        return false;
+    }
+    for (const UEdGraphPin* Pin : Node->Pins)
+    {
+        if (Pin && Pin->LinkedTo.Num() > 0)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct FPartitionedBlock
+{
+    TArray<int32> NodeIndices;
+    TArray<FVector2D> LocalPos;
+    TArray<FRowBreak> LocalBreaks;
+    TMap<UEdGraphNode_Comment*, FBox2D> CommentBoxes;
+    FBox2D Bounds = FBox2D(ForceInit);
+    double SortY = 0.0;
+    double SortX = 0.0;
+    FString TieBreak;
+};
+
+void SolveSubsetIntoBlock(const FProblem& FullProblem, const TArray<int32>& SubsetIndices, const FParams& Params,
+                          FPartitionedBlock& OutBlock)
+{
+    OutBlock = FPartitionedBlock();
+    if (SubsetIndices.Num() == 0)
+    {
+        return;
+    }
+    TMap<int32, int32> GlobalToLocal;
+    FProblem SubProblem;
+    SubProblem.Origin = FVector2D::ZeroVector;
+    SubProblem.Shapes.Reserve(SubsetIndices.Num());
+    SubProblem.Free.Reserve(SubsetIndices.Num());
+    SubProblem.Pos.Reserve(SubsetIndices.Num());
+    for (int32 LocalIdx = 0; LocalIdx < SubsetIndices.Num(); ++LocalIdx)
+    {
+        const int32 GlobalIdx = SubsetIndices[LocalIdx];
+        GlobalToLocal.Add(GlobalIdx, LocalIdx);
+        SubProblem.Shapes.Add(FullProblem.Shapes[GlobalIdx]);
+        SubProblem.Free.Add(true);
+        SubProblem.Pos.Add(FullProblem.Pos[GlobalIdx]);
+    }
+    TArray<int32> LocalToGlobalLink;
+    for (int32 LinkIdx = 0; LinkIdx < FullProblem.Links.Num(); ++LinkIdx)
+    {
+        const FLink& Wire = FullProblem.Links[LinkIdx];
+        const int32* LocalFrom = GlobalToLocal.Find(Wire.From);
+        const int32* LocalTo = GlobalToLocal.Find(Wire.To);
+        if (LocalFrom && LocalTo)
+        {
+            FLink SubWire = Wire;
+            SubWire.From = *LocalFrom;
+            SubWire.To = *LocalTo;
+            SubProblem.Links.Add(SubWire);
+            LocalToGlobalLink.Add(LinkIdx);
+        }
+    }
+    FParams SubParams = Params;
+    SubParams.bLocalizeSharedGetters = false;
+    SubParams.bProtectExistingComments = false;
+    SubParams.bCollapseAutoExecKnots = false;
+    const FSolution SubSol = Solve(SubProblem, SubParams);
+
+    FBox2D RawBounds(ForceInit);
+    for (int32 LocalIdx = 0; LocalIdx < SubsetIndices.Num(); ++LocalIdx)
+    {
+        const FVector2D At(FMath::RoundToInt(SubSol.Pos[LocalIdx].X), FMath::RoundToInt(SubSol.Pos[LocalIdx].Y));
+        const FShape& Shape = SubProblem.Shapes[LocalIdx];
+        RawBounds += At;
+        RawBounds += At + FVector2D(Shape.Width, Shape.Height);
+    }
+    for (const FRowBreak& Br : SubSol.Breaks)
+    {
+        for (const FVector2D& Pt : {Br.A, Br.B})
+        {
+            const FVector2D At(FMath::RoundToInt(Pt.X - 16.0), FMath::RoundToInt(Pt.Y - 12.0));
+            RawBounds += At;
+            RawBounds += At + FVector2D(32.0, 24.0);
+        }
+    }
+    const FVector2D Shift = RawBounds.bIsValid ? -RawBounds.Min : FVector2D::ZeroVector;
+    OutBlock.NodeIndices = SubsetIndices;
+    OutBlock.LocalPos.Reserve(SubsetIndices.Num());
+    for (int32 LocalIdx = 0; LocalIdx < SubsetIndices.Num(); ++LocalIdx)
+    {
+        const FVector2D At(FMath::RoundToInt(SubSol.Pos[LocalIdx].X + Shift.X),
+                           FMath::RoundToInt(SubSol.Pos[LocalIdx].Y + Shift.Y));
+        OutBlock.LocalPos.Add(At);
+    }
+    for (const FRowBreak& Br : SubSol.Breaks)
+    {
+        if (LocalToGlobalLink.IsValidIndex(Br.Link))
+        {
+            FRowBreak GlobalBr = Br;
+            GlobalBr.Link = LocalToGlobalLink[Br.Link];
+            GlobalBr.A += Shift;
+            GlobalBr.B += Shift;
+            OutBlock.LocalBreaks.Add(GlobalBr);
+        }
+    }
+    OutBlock.Bounds = RawBounds.bIsValid ? RawBounds.ShiftBy(Shift) : FBox2D(FVector2D::ZeroVector, FVector2D::ZeroVector);
+}
+
+// Stage 2.3 (EW-001 / EW-007): full-graph ruled layout partitioned by comment boxes.
+// Solves each comment group (and nested child comments) independently, excludes empty default events
+// into a dedicated top row, stacks all top-level blocks vertically at LeftX with RegionGap clearance,
+// and refits comment boxes from innermost to outermost with exact measured node bounds.
+void SolvePartitionedByComments(const FProblem& FullProblem, const TArray<UEdGraphNode*>& Nodes,
+                                const TArray<McpGraphLayoutDiag::FCommentGroup>& CommentGroups,
+                                const FParams& Params, FSolution& OutSolution,
+                                TMap<UEdGraphNode_Comment*, FBox2D>& OutCommentRects)
+{
+    OutSolution.Pos = FullProblem.Pos;
+    OutSolution.Breaks.Reset();
+    OutCommentRects.Reset();
+
+    TArray<int32> EmptyEventIndices;
+    TMap<UEdGraphNode_Comment*, TArray<int32>> DirectMembers;
+    TArray<int32> UnboxedIndices;
+
+    for (int32 NodeIdx = 0; NodeIdx < Nodes.Num(); ++NodeIdx)
+    {
+        UEdGraphNode* Node = Nodes[NodeIdx];
+        if (!Node)
+        {
+            continue;
+        }
+        if (IsEmptyDefaultEvent(Node))
+        {
+            EmptyEventIndices.Add(NodeIdx);
+            continue;
+        }
+        UEdGraphNode_Comment* Owner = McpGraphLayoutDiag::FindPrimaryOwnerComment(Node, CommentGroups);
+        if (Owner)
+        {
+            DirectMembers.FindOrAdd(Owner).Add(NodeIdx);
+        }
+        else
+        {
+            UnboxedIndices.Add(NodeIdx);
+        }
+    }
+
+    // Build parent-child comment nesting hierarchy (CommentGroups is sorted innermost / smallest-area first).
+    TMap<UEdGraphNode_Comment*, UEdGraphNode_Comment*> ParentOf;
+    TMap<UEdGraphNode_Comment*, TArray<UEdGraphNode_Comment*>> ChildrenOf;
+    TMap<UEdGraphNode_Comment*, FBox2D> OrigBoundsOf;
+    for (const McpGraphLayoutDiag::FCommentGroup& Group : CommentGroups)
+    {
+        if (Group.Comment)
+        {
+            OrigBoundsOf.Add(Group.Comment, Group.OriginalBounds);
+        }
+    }
+    for (int32 I = 0; I < CommentGroups.Num(); ++I)
+    {
+        UEdGraphNode_Comment* Child = CommentGroups[I].Comment;
+        if (!Child)
+        {
+            continue;
+        }
+        const FBox2D& ChildBox = CommentGroups[I].OriginalBounds;
+        const double ChildArea = ChildBox.GetArea();
+        for (int32 J = I + 1; J < CommentGroups.Num(); ++J)
+        {
+            UEdGraphNode_Comment* CandParent = CommentGroups[J].Comment;
+            if (!CandParent)
+            {
+                continue;
+            }
+            const FBox2D& ParentBox = CommentGroups[J].OriginalBounds;
+            if (ParentBox.GetArea() > ChildArea + 1.0 &&
+                ParentBox.IsInsideOrOn(ChildBox.Min) && ParentBox.IsInsideOrOn(ChildBox.Max))
+            {
+                ParentOf.Add(Child, CandParent);
+                ChildrenOf.FindOrAdd(CandParent).Add(Child);
+                break;
+            }
+        }
+    }
+
+    // Solve comments bottom-up (innermost first).
+    TMap<UEdGraphNode_Comment*, FPartitionedBlock> CommentBlocks;
+    for (const McpGraphLayoutDiag::FCommentGroup& Group : CommentGroups)
+    {
+        UEdGraphNode_Comment* Comment = Group.Comment;
+        if (!Comment)
+        {
+            continue;
+        }
+        FPartitionedBlock Combined;
+        Combined.SortY = Group.OriginalBounds.Min.Y;
+        Combined.SortX = Group.OriginalBounds.Min.X;
+        Combined.TieBreak = Comment->NodeGuid.ToString();
+
+        double LocalY = 0.0;
+        FBox2D ContentBounds(ForceInit);
+        if (const TArray<int32>* Direct = DirectMembers.Find(Comment))
+        {
+            if (Direct->Num() > 0)
+            {
+                FPartitionedBlock DirectBlock;
+                SolveSubsetIntoBlock(FullProblem, *Direct, Params, DirectBlock);
+                Combined.NodeIndices.Append(DirectBlock.NodeIndices);
+                Combined.LocalPos.Append(DirectBlock.LocalPos);
+                Combined.LocalBreaks.Append(DirectBlock.LocalBreaks);
+                ContentBounds += DirectBlock.Bounds;
+                LocalY = DirectBlock.Bounds.Max.Y + Params.RegionGap * 0.5;
+            }
+        }
+        if (TArray<UEdGraphNode_Comment*>* Children = ChildrenOf.Find(Comment))
+        {
+            Children->Sort([&](const UEdGraphNode_Comment& A, const UEdGraphNode_Comment& B)
+            {
+                const FBox2D& BoxA = OrigBoundsOf[&A];
+                const FBox2D& BoxB = OrigBoundsOf[&B];
+                if (!FMath::IsNearlyEqual(BoxA.Min.Y, BoxB.Min.Y, 1.0))
+                {
+                    return BoxA.Min.Y < BoxB.Min.Y;
+                }
+                if (!FMath::IsNearlyEqual(BoxA.Min.X, BoxB.Min.X, 1.0))
+                {
+                    return BoxA.Min.X < BoxB.Min.X;
+                }
+                return A.NodeGuid.ToString() < B.NodeGuid.ToString();
+            });
+            for (UEdGraphNode_Comment* Child : *Children)
+            {
+                if (const FPartitionedBlock* ChildBlock = CommentBlocks.Find(Child))
+                {
+                    const FVector2D ChildOffset(0.0, FMath::RoundToInt(LocalY));
+                    for (int32 Idx = 0; Idx < ChildBlock->NodeIndices.Num(); ++Idx)
+                    {
+                        Combined.NodeIndices.Add(ChildBlock->NodeIndices[Idx]);
+                        Combined.LocalPos.Add(ChildBlock->LocalPos[Idx] + ChildOffset);
+                    }
+                    for (FRowBreak Br : ChildBlock->LocalBreaks)
+                    {
+                        Br.A += ChildOffset;
+                        Br.B += ChildOffset;
+                        Combined.LocalBreaks.Add(Br);
+                    }
+                    for (const TPair<UEdGraphNode_Comment*, FBox2D>& Nested : ChildBlock->CommentBoxes)
+                    {
+                        Combined.CommentBoxes.Add(Nested.Key, Nested.Value.ShiftBy(ChildOffset));
+                    }
+                    const FBox2D ShiftedChild = ChildBlock->Bounds.ShiftBy(ChildOffset);
+                    ContentBounds += ShiftedChild;
+                    LocalY = ShiftedChild.Max.Y + Params.RegionGap * 0.5;
+                }
+            }
+        }
+
+        constexpr double PadX = 32.0;
+        constexpr double PadBottom = 32.0;
+        const double TitleBarHeight = FMath::Max(40.0, static_cast<double>(Comment->FontSize) * 1.8 + 10.0);
+        const double PadTop = TitleBarHeight + 16.0;
+
+        if (ContentBounds.bIsValid)
+        {
+            const FBox2D Outer(ContentBounds.Min - FVector2D(PadX, PadTop),
+                               ContentBounds.Max + FVector2D(PadX, PadBottom));
+            const FVector2D Shift = -Outer.Min;
+            for (FVector2D& Pt : Combined.LocalPos)
+            {
+                Pt += Shift;
+            }
+            for (FRowBreak& Br : Combined.LocalBreaks)
+            {
+                Br.A += Shift;
+                Br.B += Shift;
+            }
+            for (TPair<UEdGraphNode_Comment*, FBox2D>& Nested : Combined.CommentBoxes)
+            {
+                Nested.Value = Nested.Value.ShiftBy(Shift);
+            }
+            const FBox2D NormalizedOuter = Outer.ShiftBy(Shift);
+            Combined.CommentBoxes.Add(Comment, NormalizedOuter);
+            Combined.Bounds = NormalizedOuter;
+        }
+        else
+        {
+            const FBox2D EmptyOuter(FVector2D::ZeroVector,
+                                    FVector2D(FMath::Max(64, Comment->NodeWidth), FMath::Max(48, Comment->NodeHeight)));
+            Combined.CommentBoxes.Add(Comment, EmptyOuter);
+            Combined.Bounds = EmptyOuter;
+        }
+        CommentBlocks.Add(Comment, MoveTemp(Combined));
+    }
+
+    // Collect top-level blocks (top-level comments + unboxed block), sorted stably by original Y then X.
+    TArray<FPartitionedBlock> TopBlocks;
+    for (const McpGraphLayoutDiag::FCommentGroup& Group : CommentGroups)
+    {
+        if (Group.Comment && !ParentOf.Contains(Group.Comment))
+        {
+            if (FPartitionedBlock* Block = CommentBlocks.Find(Group.Comment))
+            {
+                TopBlocks.Add(MoveTemp(*Block));
+            }
+        }
+    }
+    if (UnboxedIndices.Num() > 0)
+    {
+        FPartitionedBlock UnboxedBlock;
+        SolveSubsetIntoBlock(FullProblem, UnboxedIndices, Params, UnboxedBlock);
+        FBox2D OrigUnboxed(ForceInit);
+        for (const int32 Idx : UnboxedIndices)
+        {
+            OrigUnboxed += FullProblem.Pos[Idx];
+        }
+        UnboxedBlock.SortY = OrigUnboxed.bIsValid ? OrigUnboxed.Min.Y : 0.0;
+        UnboxedBlock.SortX = OrigUnboxed.bIsValid ? OrigUnboxed.Min.X : 0.0;
+        UnboxedBlock.TieBreak = TEXT("~unboxed");
+        TopBlocks.Add(MoveTemp(UnboxedBlock));
+    }
+    TopBlocks.Sort([](const FPartitionedBlock& A, const FPartitionedBlock& B)
+    {
+        if (!FMath::IsNearlyEqual(A.SortY, B.SortY, 1.0))
+        {
+            return A.SortY < B.SortY;
+        }
+        if (!FMath::IsNearlyEqual(A.SortX, B.SortX, 1.0))
+        {
+            return A.SortX < B.SortX;
+        }
+        return A.TieBreak < B.TieBreak;
+    });
+
+    // Build inter-block directed graph so comment boxes flow left-to-right across columns instead of
+    // piling into one vertical stack with backward cross-comment wires.
+    const int32 NumBlocks = TopBlocks.Num();
+    TMap<int32, int32> NodeToBlock;
+    TArray<bool> BlockHasExec;
+    BlockHasExec.Init(false, NumBlocks);
+    for (int32 BlockIdx = 0; BlockIdx < NumBlocks; ++BlockIdx)
+    {
+        for (const int32 GlobalNode : TopBlocks[BlockIdx].NodeIndices)
+        {
+            NodeToBlock.Add(GlobalNode, BlockIdx);
+            const FShape& Shape = FullProblem.Shapes[GlobalNode];
+            if (Shape.ExecIn >= 0.0f || Shape.ExecOut.Num() > 0)
+            {
+                BlockHasExec[BlockIdx] = true;
+            }
+        }
+    }
+
+    TArray<TArray<int32>> BlockOut;
+    TArray<TArray<int32>> BlockExecIn;
+    TArray<TArray<int32>> BlockAllIn;
+    BlockOut.SetNum(NumBlocks);
+    BlockExecIn.SetNum(NumBlocks);
+    BlockAllIn.SetNum(NumBlocks);
+    for (const FLink& Wire : FullProblem.Links)
+    {
+        const int32* FromBlock = NodeToBlock.Find(Wire.From);
+        const int32* ToBlock = NodeToBlock.Find(Wire.To);
+        if (!FromBlock || !ToBlock || *FromBlock == *ToBlock)
+        {
+            continue;
+        }
+        // Use exec edges and outputs from pure-only blocks (e.g. shared math comment boxes) to order columns.
+        if (Wire.bExec || !BlockHasExec[*FromBlock])
+        {
+            BlockOut[*FromBlock].AddUnique(*ToBlock);
+            BlockAllIn[*ToBlock].AddUnique(*FromBlock);
+            if (Wire.bExec)
+            {
+                BlockExecIn[*ToBlock].AddUnique(*FromBlock);
+            }
+        }
+    }
+
+    // Assign column indices via longest-path relaxation (guarded against inter-block cycles).
+    TArray<int32> BlockCol;
+    BlockCol.Init(0, NumBlocks);
+    for (int32 Pass = 0; Pass < NumBlocks; ++Pass)
+    {
+        bool bChanged = false;
+        for (int32 U = 0; U < NumBlocks; ++U)
+        {
+            for (const int32 V : BlockOut[U])
+            {
+                if (BlockCol[U] + 1 > BlockCol[V] && BlockCol[U] + 1 < NumBlocks)
+                {
+                    BlockCol[V] = BlockCol[U] + 1;
+                    bChanged = true;
+                }
+            }
+        }
+        if (!bChanged)
+        {
+            break;
+        }
+    }
+
+    // Pull pure-only helper blocks (no exec nodes, no incoming edges, has consumers) right into their
+    // earliest consumer's column so shared pure math sits directly below the block(s) reading it instead
+    // of stretching long colored data wires from Column 0 across unrelated event boxes.
+    for (int32 BlockIdx = 0; BlockIdx < NumBlocks; ++BlockIdx)
+    {
+        if (!BlockHasExec[BlockIdx] && BlockAllIn[BlockIdx].Num() == 0 && BlockOut[BlockIdx].Num() > 0)
+        {
+            int32 MinConsumerCol = TNumericLimits<int32>::Max();
+            for (const int32 Consumer : BlockOut[BlockIdx])
+            {
+                MinConsumerCol = FMath::Min(MinConsumerCol, BlockCol[Consumer]);
+            }
+            if (MinConsumerCol < TNumericLimits<int32>::Max())
+            {
+                BlockCol[BlockIdx] = MinConsumerCol;
+            }
+        }
+    }
+
+    int32 MaxCol = 0;
+    for (const int32 Col : BlockCol)
+    {
+        MaxCol = FMath::Max(MaxCol, Col);
+    }
+    TArray<TArray<int32>> Columns;
+    Columns.SetNum(MaxCol + 1);
+    TArray<double> ColWidth;
+    ColWidth.Init(0.0, MaxCol + 1);
+    for (int32 BlockIdx = 0; BlockIdx < NumBlocks; ++BlockIdx)
+    {
+        const int32 Col = BlockCol[BlockIdx];
+        Columns[Col].Add(BlockIdx);
+        ColWidth[Col] = FMath::Max(ColWidth[Col], TopBlocks[BlockIdx].Bounds.GetSize().X);
+    }
+
+    const double LeftX = FMath::RoundToInt(FullProblem.Origin.X);
+    const double StartY = FMath::RoundToInt(FullProblem.Origin.Y);
+    double Col0CursorY = StartY;
+
+    // Place empty default events stacked vertically at top-left so their screen-space disabled bubbles never overlap.
+    if (EmptyEventIndices.Num() > 0)
+    {
+        EmptyEventIndices.Sort([&](int32 A, int32 B)
+        {
+            return Nodes[A]->NodeGuid.ToString() < Nodes[B]->NodeGuid.ToString();
+        });
+        constexpr double BubbleVerticalGap = 80.0;
+        for (const int32 Idx : EmptyEventIndices)
+        {
+            OutSolution.Pos[Idx] = FVector2D(LeftX, FMath::RoundToInt(Col0CursorY));
+            Col0CursorY += FullProblem.Shapes[Idx].Height + BubbleVerticalGap;
+            ColWidth[0] = FMath::Max(ColWidth[0], static_cast<double>(FullProblem.Shapes[Idx].Width));
+        }
+        Col0CursorY += Params.RegionGap * 0.5;
+    }
+
+    const double ColGapX = Params.RegionGap * 1.5;
+    TArray<double> ColX;
+    ColX.SetNum(MaxCol + 1);
+    ColX[0] = LeftX;
+    for (int32 Col = 1; Col <= MaxCol; ++Col)
+    {
+        ColX[Col] = FMath::RoundToInt(ColX[Col - 1] + ColWidth[Col - 1] + ColGapX);
+    }
+
+    TArray<double> BlockPlacedY;
+    BlockPlacedY.Init(StartY, NumBlocks);
+    TArray<double> BlockPlacedCenterY;
+    BlockPlacedCenterY.Init(StartY, NumBlocks);
+    TArray<bool> BlockPlaced;
+    BlockPlaced.Init(false, NumBlocks);
+
+    for (int32 Col = 0; Col <= MaxCol; ++Col)
+    {
+        TArray<int32>& ColBlocks = Columns[Col];
+        TArray<double> IdealY;
+        IdealY.Init(StartY, NumBlocks);
+        for (const int32 BlockIdx : ColBlocks)
+        {
+            const TArray<int32>& Feeders = BlockExecIn[BlockIdx].Num() > 0 ? BlockExecIn[BlockIdx] : BlockAllIn[BlockIdx];
+            double SumY = 0.0;
+            int32 PlacedFeeders = 0;
+            for (const int32 Pred : Feeders)
+            {
+                if (BlockPlaced[Pred])
+                {
+                    SumY += BlockPlacedCenterY[Pred];
+                    ++PlacedFeeders;
+                }
+            }
+            if (PlacedFeeders > 0)
+            {
+                const double AvgCenter = SumY / static_cast<double>(PlacedFeeders);
+                IdealY[BlockIdx] = FMath::Max(StartY, AvgCenter - TopBlocks[BlockIdx].Bounds.GetSize().Y * 0.5);
+            }
+            else
+            {
+                IdealY[BlockIdx] = TopBlocks[BlockIdx].SortY;
+            }
+        }
+        if (Col > 0)
+        {
+            ColBlocks.Sort([&](int32 A, int32 B)
+            {
+                // Keep exec blocks above pure-only helper blocks placed in the same column.
+                if (BlockHasExec[A] != BlockHasExec[B])
+                {
+                    return BlockHasExec[A];
+                }
+                if (!FMath::IsNearlyEqual(IdealY[A], IdealY[B], 1.0))
+                {
+                    return IdealY[A] < IdealY[B];
+                }
+                if (!FMath::IsNearlyEqual(TopBlocks[A].SortY, TopBlocks[B].SortY, 1.0))
+                {
+                    return TopBlocks[A].SortY < TopBlocks[B].SortY;
+                }
+                return TopBlocks[A].TieBreak < TopBlocks[B].TieBreak;
+            });
+        }
+
+        double CursorY = (Col == 0) ? Col0CursorY : StartY;
+        for (const int32 BlockIdx : ColBlocks)
+        {
+            const FPartitionedBlock& Block = TopBlocks[BlockIdx];
+            const double TargetY = (Col > 0 && (BlockExecIn[BlockIdx].Num() > 0 || BlockAllIn[BlockIdx].Num() > 0))
+                ? FMath::Max(CursorY, IdealY[BlockIdx])
+                : CursorY;
+            const FVector2D Offset(ColX[Col], FMath::RoundToInt(TargetY));
+            for (int32 Idx = 0; Idx < Block.NodeIndices.Num(); ++Idx)
+            {
+                OutSolution.Pos[Block.NodeIndices[Idx]] = Block.LocalPos[Idx] + Offset;
+            }
+            for (FRowBreak Br : Block.LocalBreaks)
+            {
+                Br.A += Offset;
+                Br.B += Offset;
+                OutSolution.Breaks.Add(Br);
+            }
+            for (const TPair<UEdGraphNode_Comment*, FBox2D>& Entry : Block.CommentBoxes)
+            {
+                OutCommentRects.Add(Entry.Key, Entry.Value.ShiftBy(Offset));
+            }
+            const double BlockH = Block.Bounds.GetSize().Y;
+            BlockPlacedY[BlockIdx] = Offset.Y;
+            BlockPlacedCenterY[BlockIdx] = Offset.Y + BlockH * 0.5;
+            BlockPlaced[BlockIdx] = true;
+            CursorY = Offset.Y + BlockH + Params.RegionGap;
+        }
+    }
 }
 } // namespace RuledNodes
 
@@ -463,8 +1024,30 @@ FShape EstimateShape(const UEdGraphNode& Node)
     return RuledNodes::ShapeAndPins(Node, Pins, Context);
 }
 
+void MeasureGraphShapes(const UEdGraph* Graph, TMap<const UEdGraphNode*, FShape>& OutShapes)
+{
+    OutShapes.Reset();
+    if (!Graph)
+    {
+        return;
+    }
+    const RuledNodes::FMeasureContext Context(Graph);
+    OutShapes.Reserve(Graph->Nodes.Num());
+    for (const UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (!Node || Node->IsA<UEdGraphNode_Comment>())
+        {
+            continue;
+        }
+        RuledNodes::FPins Pins;
+        OutShapes.Add(Node, RuledNodes::ShapeAndPins(*Node, Pins, Context));
+    }
+}
+
 float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVector2D* Origin, TArray<UEdGraphNode*>* OutAdded,
-                  const TSet<UEdGraphNode*>* Ignore, const FParams& Params, FString* OutFailure)
+                  const TSet<UEdGraphNode*>* Ignore, const FParams& Params, FString* OutFailure,
+                  TMap<UEdGraphNode*, FIntPoint>* OutPreviewPositions,
+                  TArray<UEdGraphNode*>* OutUpdatedComments)
 {
     using namespace RuledNodes;
     const float NoneBottom = Origin ? static_cast<float>(Origin->Y) : 0.0f;
@@ -475,12 +1058,31 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     {
         return NoneBottom;
     }
-    const TSet<UEdGraphNode*> FreeSet(Free);
+    TSet<UEdGraphNode*> FreeSet(Free);
+    if (Params.bCollapseAutoExecKnots && !Params.bPreviewOnly)
+    {
+        McpGraphLayoutDiag::CollapseAutoExecKnots(Graph, &FreeSet);
+        // Prune any collapsed auto-knot pointers from FreeSet.
+        TSet<UEdGraphNode*> GraphNodeSet(Graph->Nodes);
+        for (auto It = FreeSet.CreateIterator(); It; ++It)
+        {
+            if (!GraphNodeSet.Contains(*It))
+            {
+                It.RemoveCurrent();
+            }
+        }
+        if (FreeSet.Num() == 0)
+        {
+            return NoneBottom;
+        }
+    }
     const FMeasureContext Context(Graph);
     FProblem Problem;
     TArray<UEdGraphNode*> Nodes;
     TArray<FPins> Pins;
     TMap<const UEdGraphNode*, int32> Index;
+    TMap<const UEdGraphNode*, FVector2D> OriginalPositions;
+    TMap<const UEdGraphNode*, FBox2D> InitialNodeBoxes;
     FBox2D Fixed(ForceInit);
     bool bAnyFree = false;
     for (UEdGraphNode* Node : Graph->Nodes)
@@ -494,12 +1096,14 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
         const bool bFree = FreeSet.Contains(Node);
         bAnyFree |= bFree;
         const FVector2D At(Node->NodePosX, Node->NodePosY);
+        OriginalPositions.Add(Node, At);
+        InitialNodeBoxes.Add(Node, FBox2D(At, At + FVector2D(Shape.Width, Shape.Height)));
         if (!bFree)
         {
             Fixed += At;
             Fixed += At + FVector2D(Shape.Width, Shape.Height);
             // A comment bubble (a disabled ghost event's note among them) is drawn above the node: keep clear of it too.
-            if (!Node->NodeComment.IsEmpty())
+            if (!Node->NodeComment.IsEmpty() && !McpGraphLayoutDiag::IsAutoLayoutKnot(Node))
             {
                 TArray<FString> Lines;
                 Node->NodeComment.ParseIntoArrayLines(Lines);
@@ -521,6 +1125,34 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     {
         return NoneBottom;
     }
+    const TArray<McpGraphLayoutDiag::FCommentGroup> CommentGroups =
+        McpGraphLayoutDiag::CollectCommentGroups(Graph, InitialNodeBoxes);
+    if (Params.bProtectExistingComments)
+    {
+        // Untouched comment boxes (0 free members) act as locked boundaries so batch/local layouts
+        // never intrude into or detach unrelated comment regions (EW-007).
+        for (const McpGraphLayoutDiag::FCommentGroup& Group : CommentGroups)
+        {
+            if (!Group.Comment || !Group.OriginalBounds.bIsValid)
+            {
+                continue;
+            }
+            bool bHasFreeMember = false;
+            for (UEdGraphNode* Member : Group.Members)
+            {
+                if (FreeSet.Contains(Member))
+                {
+                    bHasFreeMember = true;
+                    break;
+                }
+            }
+            if (!bHasFreeMember)
+            {
+                Problem.Obstacles.Add(Group.OriginalBounds);
+                Problem.ObstacleOwner.Add(INDEX_NONE);
+            }
+        }
+    }
     TArray<TPair<UEdGraphPin*, UEdGraphPin*>> Wires;
     for (int32 From = 0; From < Nodes.Num(); ++From)
     {
@@ -528,6 +1160,9 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
         {
             for (int32 PinAt = 0; PinAt < Outputs.Num(); ++PinAt)
             {
+                const bool bDelegate = !bExec &&
+                    (Outputs[PinAt]->PinType.PinCategory == UEdGraphSchema_K2::PC_Delegate ||
+                     Outputs[PinAt]->PinType.PinCategory == UEdGraphSchema_K2::PC_MCDelegate);
                 for (UEdGraphPin* Linked : Outputs[PinAt]->LinkedTo)
                 {
                     const int32* To = Linked ? Index.Find(Linked->GetOwningNode()) : nullptr;
@@ -541,7 +1176,7 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
                     {
                         continue;
                     }
-                    Problem.Links.Add({From, PinAt, *To, ToPin, bExec});
+                    Problem.Links.Add({From, PinAt, *To, ToPin, bExec, bDelegate});
                     Wires.Emplace(Outputs[PinAt], Linked);
                 }
             }
@@ -550,7 +1185,18 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
         AddOutputs(Pins[From].DataOut, false);
     }
     Problem.Origin = Origin ? *Origin : (Fixed.bIsValid ? FVector2D(Fixed.Min.X, Fixed.Max.Y + 200.0f) : FVector2D::ZeroVector);
-    FSolution Solution = Solve(Problem, Params);
+    const bool bAllNodesFree = !Fixed.bIsValid;
+    const bool bUseCommentPartition = Params.bAllowMovingExisting && bAllNodesFree && CommentGroups.Num() > 0;
+    FSolution Solution;
+    TMap<UEdGraphNode_Comment*, FBox2D> PartitionedCommentRects;
+    if (bUseCommentPartition)
+    {
+        SolvePartitionedByComments(Problem, Nodes, CommentGroups, Params, Solution, PartitionedCommentRects);
+    }
+    else
+    {
+        Solution = Solve(Problem, Params);
+    }
     enum class ECopyKind : uint8
     {
         DuplicateNode,
@@ -587,7 +1233,7 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     // BlueprintPure member getters (e.g. Spline -> GetSplineLength, GetActorLocation). Never copy
     // calculations with arguments, static calls, exec outputs, mutated locals/params, or by-ref inputs.
     const int32 OriginalNodes = Nodes.Num();
-    if (Params.bLocalizeSharedGetters)
+    if (Params.bLocalizeSharedGetters && !bUseCommentPartition)
     {
         TSet<FName> MutatedLocals;
         for (UEdGraphNode* GraphNode : Graph->Nodes)
@@ -892,6 +1538,24 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
             }
         }
     }
+    if (Params.bPreviewOnly)
+    {
+        float PreviewBottom = -TNumericLimits<float>::Max();
+        for (int32 Node = 0; Node < OriginalNodes; ++Node)
+        {
+            const int32 NewX = FMath::RoundToInt(Solution.Pos[Node].X);
+            const int32 NewY = FMath::RoundToInt(Solution.Pos[Node].Y);
+            if (Problem.Free[Node])
+            {
+                if (OutPreviewPositions)
+                {
+                    OutPreviewPositions->Add(Nodes[Node], FIntPoint(NewX, NewY));
+                }
+                PreviewBottom = FMath::Max(PreviewBottom, static_cast<float>(Solution.Pos[Node].Y + Problem.Shapes[Node].Height));
+            }
+        }
+        return PreviewBottom > -TNumericLimits<float>::Max() ? PreviewBottom : NoneBottom;
+    }
     // Commit the validated localized copies and rewire only their planned consumers. DuplicateObject
     // preserves the exact FMemberReference and pin types/defaults. Clear cloned link arrays directly:
     // BreakAllNodeLinks on a fresh duplicate could otherwise touch the original neighbours.
@@ -1002,6 +1666,56 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
         {
             if (bNewStart) { OutAdded->Add(A); }
             if (bNewEnd) { OutAdded->Add(B); }
+        }
+    }
+    if (bUseCommentPartition)
+    {
+        for (const TPair<UEdGraphNode_Comment*, FBox2D>& Entry : PartitionedCommentRects)
+        {
+            UEdGraphNode_Comment* Comment = Entry.Key;
+            if (!Comment || !Entry.Value.bIsValid)
+            {
+                continue;
+            }
+            const int32 NewX = FMath::RoundToInt(Entry.Value.Min.X);
+            const int32 NewY = FMath::RoundToInt(Entry.Value.Min.Y);
+            const int32 NewW = FMath::Max(64, FMath::RoundToInt(Entry.Value.Max.X - Entry.Value.Min.X));
+            const int32 NewH = FMath::Max(48, FMath::RoundToInt(Entry.Value.Max.Y - Entry.Value.Min.Y));
+            if (Comment->NodePosX != NewX || Comment->NodePosY != NewY ||
+                Comment->NodeWidth != NewW || Comment->NodeHeight != NewH)
+            {
+                Comment->Modify();
+                Comment->NodePosX = NewX;
+                Comment->NodePosY = NewY;
+                Comment->NodeWidth = NewW;
+                Comment->NodeHeight = NewH;
+                if (OutUpdatedComments)
+                {
+                    OutUpdatedComments->Add(Comment);
+                }
+            }
+        }
+    }
+    else if (CommentGroups.Num() > 0)
+    {
+        TMap<const UEdGraphNode*, FBox2D> FinalBoxes;
+        for (int32 Node = 0; Node < Nodes.Num(); ++Node)
+        {
+            if (Nodes[Node])
+            {
+                const FVector2D At(Nodes[Node]->NodePosX, Nodes[Node]->NodePosY);
+                FinalBoxes.Add(Nodes[Node], FBox2D(At, At + FVector2D(Problem.Shapes[Node].Width, Problem.Shapes[Node].Height)));
+            }
+        }
+        TArray<UEdGraphNode_Comment*> UpdatedComments;
+        McpGraphLayoutDiag::SyncAndRefitComments(CommentGroups, OriginalPositions, FinalBoxes,
+                                                 /*bAllowShrinkOnFullReflow=*/false, &UpdatedComments);
+        if (OutUpdatedComments)
+        {
+            for (UEdGraphNode_Comment* Comment : UpdatedComments)
+            {
+                OutUpdatedComments->Add(Comment);
+            }
         }
     }
     return Bottom > -TNumericLimits<float>::Max() ? Bottom : NoneBottom;

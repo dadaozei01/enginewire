@@ -2,9 +2,13 @@
 #include "Domains/BlueprintGraph/McpBPGraphBatchSteps.h"
 #include "Foundation/BridgeHelpers/Responses/McpJsonFields.h"
 
+#include "EdGraphNode_Comment.h"
+#include "EdGraphSchema_K2.h"
+#include "Foundation/GraphLayout/McpGraphLayoutDiagnostics.h"
 #include "Foundation/GraphLayout/McpLayered.h"
 #include "Foundation/GraphLayout/McpRuled.h"
 #include "Foundation/McpScopedEditorTransaction.h"
+#include "K2Node_Knot.h"
 #include "ScopedTransaction.h"
 
 // delete_node: one node (nodeId or nodeGuid) or many (nodeIds). Removing a 71-node dead chain used to take
@@ -120,60 +124,292 @@ bool DeleteNodes(FActionContext& Context)
     return true;
 }
 
-// arrange_nodes: the listed nodes move beside the nodes they are wired to, as a build_graph step's
-// auto-placed nodes do (SettleAutoPlacedNodes); the nodes left out stay put and anchor them. The listed
-// ones are parked out of the way first, so their old spots block nothing; one with no wired neighbour
-// left in place, or no free slot near it, goes back where it was and is named under unmoved. layout
-// "layered" instead lays the listed nodes out in columns along the links among them (McpLayered), the
-// first listed staying where it is. "ruled" (the default) lays them out in the house style (McpRuled): exec rows with
-// their exec pins level, inputs centred one column left of their readers, deeper data under the row; the nodes left
-// out stay put, anchor them and are kept clear of.
+// arrange_nodes / format_graph: arranges Blueprint graph nodes with full-graph, event-region, or selection scope,
+// preview/dry-run support, comment-box preservation, PC_Exec back-edge outer corridor routing, semantic topology
+// verification, and structured before/after quality diagnostics (EW-001..EW-008).
 bool ArrangeNodes(FActionContext& Context)
 {
-    if (Context.SubAction != TEXT("arrange_nodes"))
+    const bool bIsFormatGraph = Context.SubAction == TEXT("format_graph");
+    if (Context.SubAction != TEXT("arrange_nodes") && !bIsFormatGraph)
     {
         return false;
     }
-    const TArray<TSharedPtr<FJsonValue>>* Ids = nullptr;
-    if (!Context.Payload->TryGetArrayField(TEXT("nodeIds"), Ids) || Ids->Num() == 0)
+
+    FString Scope = GetJsonStringField(Context.Payload, TEXT("scope"));
+    if (Scope.IsEmpty())
     {
-        Context.SendError(TEXT("arrange_nodes needs nodeIds: the nodes to move. The nodes left out stay put and anchor them."),
+        Scope = bIsFormatGraph ? TEXT("graph") : TEXT("selection");
+    }
+    const bool bFullGraphScope = Scope.Equals(TEXT("graph"), ESearchCase::IgnoreCase);
+    const bool bEventRegionScope = Scope.Equals(TEXT("event_regions"), ESearchCase::IgnoreCase);
+    const bool bPreview = GetJsonBoolField(Context.Payload, TEXT("preview"), false) ||
+                          GetJsonBoolField(Context.Payload, TEXT("dryRun"), false);
+    const bool bRouteBackEdges = GetJsonBoolField(Context.Payload, TEXT("routeBackEdges"), true);
+    const bool bLocalizeSharedGetters = GetJsonBoolField(Context.Payload, TEXT("localizeSharedGetters"), true);
+
+    TArray<UObject*> Nodes;
+    const TArray<TSharedPtr<FJsonValue>>* Ids = nullptr;
+    const bool bHasIds = Context.Payload->TryGetArrayField(TEXT("nodeIds"), Ids) && Ids && Ids->Num() > 0;
+    if (bFullGraphScope && !bHasIds)
+    {
+        for (UEdGraphNode* Node : Context.TargetGraph->Nodes)
+        {
+            if (Node && !Node->IsA<UEdGraphNode_Comment>())
+            {
+                Nodes.AddUnique(Node);
+            }
+        }
+        if (Nodes.Num() == 0)
+        {
+            TSharedPtr<FJsonObject> EmptyResult = McpHandlerUtils::CreateResultObject();
+            EmptyResult->SetStringField(TEXT("layoutStatus"), TEXT("no_changes"));
+            EmptyResult->SetStringField(TEXT("scope"), Scope);
+            EmptyResult->SetArrayField(TEXT("moved"), {});
+            EmptyResult->SetArrayField(TEXT("unmoved"), {});
+            EmptyResult->SetArrayField(TEXT("alreadyInPlace"), {});
+            Context.SendResponse(TEXT("Graph has no nodes to arrange."), EmptyResult);
+            return true;
+        }
+    }
+    else
+    {
+        if (!bHasIds)
+        {
+            Context.SendError(TEXT("arrange_nodes needs nodeIds (or scope: \"graph\" on format_graph). The nodes left out stay put and anchor them."),
+                              TEXT("INVALID_ARGUMENT"));
+            return true;
+        }
+        // Every id resolves before anything moves: an unknown one is refused with nothing changed.
+        for (const TSharedPtr<FJsonValue>& Id : *Ids)
+        {
+            UEdGraphNode* Node = Context.FindNode(Id.IsValid() ? Id->AsString() : FString());
+            if (!Node)
+            {
+                Context.SendNodeNotFound(Id.IsValid() ? Id->AsString() : FString());
+                return true;
+            }
+            if (!Node->IsA<UEdGraphNode_Comment>())
+            {
+                Nodes.AddUnique(Node);
+            }
+        }
+    }
+
+    // For event_regions scope, expand listed seeds to their owning exec chains and exclusive pure data producers.
+    if (bEventRegionScope && Nodes.Num() > 0)
+    {
+        TSet<UEdGraphNode*> Expanded;
+        TArray<UEdGraphNode*> Open;
+        for (UObject* Obj : Nodes)
+        {
+            if (UEdGraphNode* N = Cast<UEdGraphNode>(Obj))
+            {
+                Expanded.Add(N);
+                Open.Add(N);
+            }
+        }
+        while (Open.Num() > 0)
+        {
+            UEdGraphNode* Cur = Open.Pop(EAllowShrinking::No);
+            for (const UEdGraphPin* Pin : Cur->Pins)
+            {
+                if (!Pin || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+                {
+                    continue;
+                }
+                for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                {
+                    UEdGraphNode* Other = Linked ? Linked->GetOwningNode() : nullptr;
+                    if (Other && Other->GetGraph() == Context.TargetGraph && !Other->IsA<UEdGraphNode_Comment>() &&
+                        !Expanded.Contains(Other))
+                    {
+                        Expanded.Add(Other);
+                        Open.Add(Other);
+                    }
+                }
+            }
+        }
+        for (bool bGrew = true; bGrew;)
+        {
+            bGrew = false;
+            TArray<UEdGraphNode*> ToAdd;
+            for (UEdGraphNode* Node : Expanded)
+            {
+                for (const UEdGraphPin* Pin : Node->Pins)
+                {
+                    if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+                    {
+                        continue;
+                    }
+                    for (const UEdGraphPin* Linked : Pin->LinkedTo)
+                    {
+                        UEdGraphNode* Prod = Linked ? Linked->GetOwningNode() : nullptr;
+                        if (!Prod || Prod->GetGraph() != Context.TargetGraph || Prod->IsA<UEdGraphNode_Comment>() ||
+                            Expanded.Contains(Prod))
+                        {
+                            continue;
+                        }
+                        bool bProdHasExec = false;
+                        for (const UEdGraphPin* PPin : Prod->Pins)
+                        {
+                            if (PPin && !PPin->bHidden && PPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+                            {
+                                bProdHasExec = true;
+                                break;
+                            }
+                        }
+                        if (!bProdHasExec)
+                        {
+                            ToAdd.AddUnique(Prod);
+                        }
+                    }
+                }
+            }
+            for (UEdGraphNode* Prod : ToAdd)
+            {
+                Expanded.Add(Prod);
+                Nodes.AddUnique(Prod);
+                bGrew = true;
+            }
+        }
+        for (UEdGraphNode* Node : Expanded)
+        {
+            Nodes.AddUnique(Node);
+        }
+    }
+
+    FString Layout = GetJsonStringField(Context.Payload, TEXT("layout"));
+    if (Layout.IsEmpty())
+    {
+        Layout = TEXT("ruled");
+    }
+    const bool bLayered = Layout == TEXT("layered");
+    const bool bRuled = Layout == TEXT("ruled");
+    const bool bBeside = Layout == TEXT("beside");
+    if (!bLayered && !bRuled && !bBeside)
+    {
+        Context.SendError(FString::Printf(TEXT("Unknown layout '%s'. Use ruled (default), layered, or beside."), *Layout),
                           TEXT("INVALID_ARGUMENT"));
         return true;
     }
-    // Every id resolves before anything moves: an unknown one is refused with nothing changed.
-    TArray<UObject*> Nodes;
-    for (const TSharedPtr<FJsonValue>& Id : *Ids)
+
+    TArray<UEdGraphNode*> Listed;
+    TMap<UEdGraphNode*, FIntPoint> Original;
+    TMap<const UEdGraphNode*, FVector2D> OriginalAllPos;
+    for (UEdGraphNode* Node : Context.TargetGraph->Nodes)
     {
-        UEdGraphNode* Node = Context.FindNode(Id.IsValid() ? Id->AsString() : FString());
-        if (!Node)
+        if (Node && !Node->IsA<UEdGraphNode_Comment>())
         {
-            Context.SendNodeNotFound(Id.IsValid() ? Id->AsString() : FString());
+            OriginalAllPos.Add(Node, FVector2D(Node->NodePosX, Node->NodePosY));
+        }
+    }
+    for (UObject* Object : Nodes)
+    {
+        UEdGraphNode* Node = CastChecked<UEdGraphNode>(Object);
+        Original.Add(Node, FIntPoint(Node->NodePosX, Node->NodePosY));
+        Listed.Add(Node);
+    }
+
+    const TSet<UEdGraphNode*> ScopeSet(Listed);
+    const TMap<const UEdGraphNode*, FBox2D> BeforeBoxes = McpGraphLayoutDiag::MeasureNodeBoxes(Context.TargetGraph);
+    const TArray<McpGraphLayoutDiag::FCommentGroup> OriginalComments =
+        McpGraphLayoutDiag::CollectCommentGroups(Context.TargetGraph, BeforeBoxes);
+    const TArray<FString> BeforeFingerprint = McpGraphLayoutDiag::BuildSemanticTopologyFingerprint(Context.TargetGraph);
+    const McpGraphLayoutDiag::FLayoutQualityReport BeforeQuality =
+        McpGraphLayoutDiag::AnalyzeGraphQuality(Context.TargetGraph, bFullGraphScope ? nullptr : &ScopeSet,
+                                                &BeforeBoxes, &OriginalComments, &OriginalAllPos);
+
+    TSharedPtr<FJsonObject> Result = McpHandlerUtils::CreateResultObject();
+    Result->SetStringField(TEXT("scope"), Scope);
+    Result->SetStringField(TEXT("layout"), Layout);
+
+    if (bPreview)
+    {
+        TMap<UEdGraphNode*, FIntPoint> PreviewPositions;
+        FString Failure;
+        if (bLayered)
+        {
+            // McpLayered is pure geometry without a preview hook: solve in-place, record, then restore.
+            McpLayered::LayoutNodes(Listed);
+            int32 ObstacleHits = 0;
+            McpGraphLayoutDiag::ShiftBlockClearOfObstacles(Context.TargetGraph, Listed, BeforeBoxes, OriginalComments, ObstacleHits);
+            for (UEdGraphNode* Node : Listed)
+            {
+                PreviewPositions.Add(Node, FIntPoint(Node->NodePosX, Node->NodePosY));
+                const FIntPoint& Orig = Original.FindChecked(Node);
+                Node->NodePosX = Orig.X;
+                Node->NodePosY = Orig.Y;
+            }
+        }
+        else if (bRuled)
+        {
+            McpRuled::FParams Params;
+            Params.bAllowMovingExisting = bFullGraphScope;
+            Params.bLocalizeSharedGetters = bLocalizeSharedGetters;
+            Params.bRouteBackwardExecs = bRouteBackEdges;
+            Params.bProtectExistingComments = !bFullGraphScope;
+            Params.bPreviewOnly = true;
+            McpRuled::LayoutNodes(Context.TargetGraph, Listed, nullptr, nullptr, nullptr, Params, &Failure, &PreviewPositions);
+        }
+        if (!Failure.IsEmpty())
+        {
+            Result->SetStringField(TEXT("layoutStatus"), TEXT("failed"));
+            Context.SendError(Failure, TEXT("LAYOUT_COLLISION"));
             return true;
         }
-        Nodes.AddUnique(Node);
+        TArray<TSharedPtr<FJsonValue>> PlannedMoved;
+        double MaxDisp = 0.0;
+        for (const TPair<UEdGraphNode*, FIntPoint>& Entry : PreviewPositions)
+        {
+            const FIntPoint* Orig = Original.Find(Entry.Key);
+            if (Orig && *Orig != Entry.Value)
+            {
+                MaxDisp = FMath::Max(MaxDisp, (FVector2D(Entry.Value.X, Entry.Value.Y) - FVector2D(Orig->X, Orig->Y)).Size());
+                TSharedPtr<FJsonObject> Row = MakeShared<FJsonObject>();
+                Row->SetStringField(TEXT("nodeId"), Entry.Key->NodeGuid.ToString());
+                Row->SetStringField(TEXT("nodeTitle"), Entry.Key->GetNodeTitle(ENodeTitleType::ListView).ToString());
+                Row->SetNumberField(TEXT("x"), Entry.Value.X);
+                Row->SetNumberField(TEXT("y"), Entry.Value.Y);
+                PlannedMoved.Add(MakeShared<FJsonValueObject>(Row));
+            }
+        }
+        TSharedRef<FJsonObject> Diag = MakeShared<FJsonObject>();
+        Diag->SetObjectField(TEXT("before"), BeforeQuality.ToJson());
+        Diag->SetNumberField(TEXT("plannedMaxDisplacement"), FMath::RoundToInt(MaxDisp));
+        Diag->SetBoolField(TEXT("topologyFingerprintMatched"), true);
+        Result->SetStringField(TEXT("layoutStatus"), PlannedMoved.Num() > 0 ? TEXT("planned") : TEXT("no_changes"));
+        Result->SetArrayField(TEXT("moved"), PlannedMoved);
+        Result->SetArrayField(TEXT("unmoved"), {});
+        Result->SetArrayField(TEXT("alreadyInPlace"), {});
+        Result->SetObjectField(TEXT("layoutDiagnostics"), Diag);
+        Context.SendResponse(FString::Printf(TEXT("Previewed %s layout (%s scope): %d of %d nodes would move (max displacement %d)."),
+                                             *Layout, *Scope, PlannedMoved.Num(), Original.Num(), FMath::RoundToInt(MaxDisp)),
+                             Result);
+        return true;
     }
-    TSharedPtr<FJsonObject> Result = McpHandlerUtils::CreateResultObject();
+
     TArray<TSharedPtr<FJsonValue>> Moved;
     TArray<TSharedPtr<FJsonValue>> Stayed;
     TArray<TSharedPtr<FJsonValue>> InPlace;
-    TMap<UEdGraphNode*, FIntPoint> Original;
-    const FString Layout = GetJsonStringField(Context.Payload, TEXT("layout"));
-    const bool bLayered = Layout == TEXT("layered");
-    const bool bRuled = Layout.IsEmpty() || Layout == TEXT("ruled");
+    TArray<UEdGraphNode*> AddedNodes;
+    TArray<UEdGraphNode*> UpdatedComments;
+    bool bTopologyMatched = true;
     {
-        // One undo step for the moves. It closes before the save below: a save inside it left the file holding
-        // the new positions while undo put the old ones back in memory.
-        const FMcpScopedEditorTransaction Transaction(FText::FromString(TEXT("Arrange Nodes")),
-                                                      EMcpMutationDurability::EditorStateOnly, Nodes);
-        GraphBatch::FBatchState State;
-        TArray<UEdGraphNode*> Listed;
-        for (UObject* Object : Nodes)
+        // Include comments in transaction object set so undo restores comment box refits too.
+        TArray<UObject*> TxObjects = Nodes;
+        for (const McpGraphLayoutDiag::FCommentGroup& Group : OriginalComments)
         {
-            UEdGraphNode* Node = CastChecked<UEdGraphNode>(Object);
-            Original.Add(Node, FIntPoint(Node->NodePosX, Node->NodePosY));
-            Listed.Add(Node);
-            if (!bLayered && !bRuled)
+            if (Group.Comment)
+            {
+                TxObjects.AddUnique(Group.Comment);
+            }
+        }
+        const FMcpScopedEditorTransaction Transaction(FText::FromString(TEXT("Arrange Nodes")),
+                                                      EMcpMutationDurability::EditorStateOnly, TxObjects);
+        GraphBatch::FBatchState State;
+        if (bBeside)
+        {
+            for (UEdGraphNode* Node : Listed)
             {
                 Node->NodePosX = -1000000 - Original.Num() * 480;
                 Node->NodePosY = -1000000;
@@ -183,23 +419,65 @@ bool ArrangeNodes(FActionContext& Context)
         if (bLayered)
         {
             McpLayered::LayoutNodes(Listed);
+            int32 ObstacleHits = 0;
+            if (!McpGraphLayoutDiag::ShiftBlockClearOfObstacles(Context.TargetGraph, Listed, BeforeBoxes, OriginalComments, ObstacleHits))
+            {
+                for (const TPair<UEdGraphNode*, FIntPoint>& Entry : Original)
+                {
+                    Entry.Key->NodePosX = Entry.Value.X;
+                    Entry.Key->NodePosY = Entry.Value.Y;
+                }
+                Context.SendError(TEXT("layered: no clear spot for the selection without moving unselected nodes or comments; positions restored. Use ruled or widen the selection."),
+                                  TEXT("LAYOUT_COLLISION"));
+                return true;
+            }
+            Result->SetNumberField(TEXT("layeredObstacleHitsBeforeShift"), ObstacleHits);
         }
-        if (bRuled)
+        else if (bRuled)
         {
             McpRuled::FParams Params;
-            Params.bAllowMovingExisting = false;
+            Params.bAllowMovingExisting = bFullGraphScope;
+            Params.bLocalizeSharedGetters = bLocalizeSharedGetters;
+            Params.bRouteBackwardExecs = bRouteBackEdges;
+            Params.bProtectExistingComments = !bFullGraphScope;
+            Params.bCollapseAutoExecKnots = true;
             FString Failure;
-            McpRuled::LayoutNodes(Context.TargetGraph, Listed, nullptr, nullptr, nullptr, Params, &Failure);
+            McpRuled::LayoutNodes(Context.TargetGraph, Listed, nullptr, &AddedNodes, nullptr, Params, &Failure,
+                                  nullptr, &UpdatedComments);
             if (!Failure.IsEmpty())
             {
                 Context.SendError(Failure, TEXT("LAYOUT_COLLISION"));
                 return true;
             }
         }
-        const TArray<UEdGraphNode*> Unmoved = bLayered || bRuled ? TArray<UEdGraphNode*>() : GraphBatch::SettleAutoPlacedNodes(Context.Blueprint, State);
+
+        const TArray<FString> AfterFingerprint = McpGraphLayoutDiag::BuildSemanticTopologyFingerprint(Context.TargetGraph);
+        bTopologyMatched = (BeforeFingerprint == AfterFingerprint);
+        if (!bTopologyMatched)
+        {
+            for (const TPair<UEdGraphNode*, FIntPoint>& Entry : Original)
+            {
+                if (Entry.Key && Context.TargetGraph->Nodes.Contains(Entry.Key))
+                {
+                    Entry.Key->NodePosX = Entry.Value.X;
+                    Entry.Key->NodePosY = Entry.Value.Y;
+                }
+            }
+            Result->SetStringField(TEXT("layoutStatus"), TEXT("rolled_back"));
+            Context.SendError(TEXT("Layout aborted because logical pin topology changed unexpectedly; positions restored."),
+                              TEXT("TOPOLOGY_MISMATCH"));
+            return true;
+        }
+
+        const TArray<UEdGraphNode*> Unmoved = bBeside ? GraphBatch::SettleAutoPlacedNodes(Context.Blueprint, State) : TArray<UEdGraphNode*>();
+        TSet<UEdGraphNode*> LiveGraphNodes(Context.TargetGraph->Nodes);
         for (const TPair<UEdGraphNode*, FIntPoint>& Entry : Original)
         {
             UEdGraphNode* Node = Entry.Key;
+            if (!Node || !LiveGraphNodes.Contains(Node))
+            {
+                continue;
+            }
             if (Unmoved.Contains(Node))
             {
                 Node->NodePosX = Entry.Value.X;
@@ -207,7 +485,6 @@ bool ArrangeNodes(FActionContext& Context)
                 Stayed.Add(MakeShared<FJsonValueString>(Node->NodeGuid.ToString()));
                 continue;
             }
-            // Settled where it already stood: counted as moved, the reply claimed a change undo then had nothing for.
             if (FIntPoint(Node->NodePosX, Node->NodePosY) == Entry.Value)
             {
                 InPlace.Add(MakeShared<FJsonValueString>(Node->NodeGuid.ToString()));
@@ -222,20 +499,63 @@ bool ArrangeNodes(FActionContext& Context)
         }
         Context.TargetGraph->NotifyGraphChanged();
         FBlueprintEditorUtils::MarkBlueprintAsModified(Context.Blueprint);
-        // With nothing moved the buffer drops the empty transaction as it closes, so there is no step to claim.
-        if (Moved.Num() > 0)
+        if (Moved.Num() > 0 || AddedNodes.Num() > 0 || UpdatedComments.Num() > 0)
         {
             Transaction.DescribeInto(Result);
         }
     }
-    SaveLoadedAssetThrottled(Context.Blueprint);
+    const bool bSaved = SaveLoadedAssetThrottled(Context.Blueprint);
+
+    TSet<UEdGraphNode*> AfterScopeSet;
+    for (UEdGraphNode* N : Listed)
+    {
+        if (N && Context.TargetGraph->Nodes.Contains(N))
+        {
+            AfterScopeSet.Add(N);
+        }
+    }
+    AfterScopeSet.Append(AddedNodes);
+    const McpGraphLayoutDiag::FLayoutQualityReport AfterQuality =
+        McpGraphLayoutDiag::AnalyzeGraphQuality(Context.TargetGraph, bFullGraphScope ? nullptr : &AfterScopeSet,
+                                                nullptr, &OriginalComments, &OriginalAllPos);
+
+    const bool bDegraded = AfterQuality.NodeOverlapCount > BeforeQuality.NodeOverlapCount ||
+                           AfterQuality.CommentIntrusionCount > 0 ||
+                           AfterQuality.DanglingAutoKnotCount > 0;
+    const FString Status = (Moved.Num() == 0 && AddedNodes.Num() == 0 && UpdatedComments.Num() == 0)
+        ? TEXT("no_changes")
+        : (bDegraded ? TEXT("degraded") : TEXT("applied"));
+
+    TSharedRef<FJsonObject> Diag = MakeShared<FJsonObject>();
+    Diag->SetObjectField(TEXT("before"), BeforeQuality.ToJson());
+    Diag->SetObjectField(TEXT("after"), AfterQuality.ToJson());
+    Diag->SetBoolField(TEXT("topologyFingerprintMatched"), bTopologyMatched);
+    Diag->SetNumberField(TEXT("addedNodes"), AddedNodes.Num());
+    Diag->SetNumberField(TEXT("updatedComments"), UpdatedComments.Num());
+
+    TArray<TSharedPtr<FJsonValue>> UpdatedCommentIds;
+    for (UEdGraphNode* Comment : UpdatedComments)
+    {
+        if (Comment)
+        {
+            UpdatedCommentIds.Add(MakeShared<FJsonValueString>(Comment->NodeGuid.ToString()));
+        }
+    }
+
+    Result->SetStringField(TEXT("layoutStatus"), Status);
+    Result->SetBoolField(TEXT("saved"), bSaved);
     Result->SetArrayField(TEXT("moved"), Moved);
     Result->SetArrayField(TEXT("unmoved"), Stayed);
     Result->SetArrayField(TEXT("alreadyInPlace"), InPlace);
-    Context.SendResponse(FString::Printf(TEXT("Moved %d of %d nodes %s (%d already there)."), Moved.Num(), Original.Num(),
-                                         bRuled ? TEXT("into rows by the house style") : bLayered ? TEXT("into columns along their links") : TEXT("beside the nodes they are wired to"),
-                                         InPlace.Num()),
-                         Result);
+    Result->SetArrayField(TEXT("updatedComments"), UpdatedCommentIds);
+    Result->SetObjectField(TEXT("layoutDiagnostics"), Diag);
+    Context.SendResponse(FString::Printf(
+        TEXT("Moved %d of %d nodes (%s, %s scope; %d already in place, %d comments updated; overlaps %d->%d, backward exec %d->%d, wire crossings %d->%d)."),
+        Moved.Num(), Original.Num(), *Layout, *Scope, InPlace.Num(), UpdatedComments.Num(),
+        BeforeQuality.NodeOverlapCount, AfterQuality.NodeOverlapCount,
+        BeforeQuality.BackwardExecEdgeCount, AfterQuality.BackwardExecEdgeCount,
+        BeforeQuality.WireNodeCrossingCount, AfterQuality.WireNodeCrossingCount),
+        Result);
     return true;
 }
 }

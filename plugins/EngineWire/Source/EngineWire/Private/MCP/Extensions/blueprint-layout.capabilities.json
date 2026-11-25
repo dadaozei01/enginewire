@@ -1,0 +1,226 @@
+[
+  {
+    "id": "blueprint.format_graph",
+    "aliases": [
+      "manage_blueprint.format_graph"
+    ],
+    "discovery": {
+      "domain": "blueprint",
+      "family": "graph",
+      "topics": [
+        "format blueprint graph",
+        "auto layout blueprint",
+        "arrange whole graph",
+        "preview blueprint layout",
+        "蓝图整图排版",
+        "蓝图排版预览"
+      ],
+      "summary": "Arrange a Blueprint graph with explicit scope (graph, event_regions, or selection), layout engine (ruled default, layered, or beside), optional preview mode, PC_Exec back-edge outer corridor routing, comment-box preservation, unused pure node detection, and before/after wire quality diagnostics.",
+      "whenToUse": [
+        "Arrange an entire EventGraph or function graph including event entry nodes without listing every node ID.",
+        "Preview layout displacement, boundary edges, backward exec wires, and unused pure node groups before applying.",
+        "Format selected nodes or owning event regions while keeping untouched comment boxes and unselected nodes fixed."
+      ],
+      "whenNotToUse": [
+        "Incremental node creation and wiring (use edit_graph batch without posX/posY instead)."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "blueprintPath": {
+            "type": "string",
+            "description": "Blueprint asset path, e.g. /Game/Blueprints/BP_Example."
+          },
+          "graphName": {
+            "type": "string",
+            "description": "Target graph name (default EventGraph)."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "graph",
+              "event_regions",
+              "selection"
+            ],
+            "description": "graph (default): format all active nodes including event entries. event_regions: expand nodeIds to full owning exec chains and pure inputs. selection: move only nodeIds while keeping unselected nodes and comments anchored."
+          },
+          "nodeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Node GUIDs to format (required for selection/event_regions; optional for graph)."
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "ruled",
+              "layered",
+              "beside"
+            ],
+            "description": "ruled (default for every scope): house style — events flush left, straight exec rows, pure data under the row, comment regions preserved. layered: columns along links for an isolated selection; unselected nodes and comments stay fixed. beside: settle nodes next to their wired neighbours."
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "Solve and return diagnostics without mutating node positions, knots, or comments (default false)."
+          },
+          "routeBackEdges": {
+            "type": "boolean",
+            "description": "Route backward PC_Exec edges through outer corridor auto-knots (default true; never modifies data/wildcard pins)."
+          },
+          "localizeSharedGetters": {
+            "type": "boolean",
+            "description": "In ruled mode, duplicate zero-side-effect shared variable getters near distant readers (default true)."
+          }
+        },
+        "required": [
+          "blueprintPath"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "layoutStatus": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "layout": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "moved": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-unreal-reflection-boundary": true
+            }
+          },
+          "unmoved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "alreadyInPlace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updatedComments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "layoutDiagnostics": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          },
+          "compiled": {
+            "type": "boolean"
+          },
+          "compilerStatus": {
+            "type": "string"
+          },
+          "errorCount": {
+            "type": "number"
+          },
+          "warningCount": {
+            "type": "number"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-unreal-reflection-boundary": true
+            }
+          },
+          "undoBufferReset": {
+            "type": "boolean"
+          },
+          "undo": {
+            "type": "object",
+            "x-unreal-reflection-boundary": true
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "examples": [
+      {
+        "title": "Preview full-graph formatting with quality diagnostics.",
+        "input": {
+          "action": "format_graph",
+          "blueprintPath": "/Game/Blueprints/BP_Example",
+          "graphName": "EventGraph",
+          "scope": "graph",
+          "layout": "ruled",
+          "preview": true
+        },
+        "output": {
+          "success": true,
+          "layoutStatus": "planned",
+          "scope": "graph",
+          "layout": "ruled"
+        }
+      }
+    ],
+    "availability": {
+      "requiredPlugins": [],
+      "editorStates": [
+        "edit"
+      ]
+    },
+    "behavior": {
+      "effect": "write",
+      "idempotency": "idempotent",
+      "longRunning": false,
+      "safeToRetry": true
+    },
+    "policy": {
+      "requiredScope": "write",
+      "consent": "none",
+      "dataAccess": "project-write"
+    },
+    "cost": {
+      "latency": "interactive",
+      "resources": "medium"
+    },
+    "routing": {
+      "parentTool": "manage_blueprint",
+      "dispatchAction": "format_graph"
+    }
+  }
+]

@@ -108,6 +108,8 @@ TArray<UEdGraphNode*> SettleAutoPlacedNodes(UBlueprint* Blueprint, const FBatchS
 
 /** Once every step ran, lays the auto-placed nodes out in the house style (McpRuled), graph by graph: exec rows with
  *  their exec pins level, inputs centred one column left of their readers, deeper data under the row. Nodes given a
- *  position, and every node the graph held before, stay where they are. */
-void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State);
+ *  position, and every node the graph held before, stay where they are. Optionally fills OutDiagnostics with
+ *  post-layout wire/overlap/comment quality metrics. */
+void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State,
+                           TSharedPtr<FJsonObject>* OutDiagnostics = nullptr);
 }

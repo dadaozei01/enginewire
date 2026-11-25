@@ -1,6 +1,7 @@
 #include "Domains/BlueprintGraph/McpBPGraphBatchSteps.h"
 
 #include "Foundation/BridgeHelpers/Responses/McpJsonFields.h"
+#include "Foundation/GraphLayout/McpGraphLayoutDiagnostics.h"
 #include "Foundation/GraphLayout/McpRuled.h"
 
 #include "EdGraphNode_Comment.h"
@@ -382,17 +383,32 @@ FMcpCapturedResponse RunPlacedStep(const FActionContext& Parent, FBatchState& St
         }
         Reply = RunStep(Parent, Payload, Edit, StepId, OutPins);
     }
-    FString CreatedGuid;
-    if ((bCreates || Edit == TEXT("add_event")) && Reply.bSuccess && Reply.Result.IsValid() &&
-        Reply.Result->TryGetStringField(TEXT("nodeGuid"), CreatedGuid) && !State.ExistingGuids.Contains(CreatedGuid))
+    // EW-005: register primary AND companion created nodes (e.g. BindEvent's CustomEvent eventNodeGuid
+    // and add_function's resultNodeGuid) so companion callbacks never stay stranded on the initial grid.
+    const auto RegisterCreatedGuid = [&State, bAuto](const FString& Guid)
     {
+        if (Guid.IsEmpty() || State.ExistingGuids.Contains(Guid))
+        {
+            return;
+        }
         if (bAuto)
         {
-            State.AutoPlacedGuids.AddUnique(CreatedGuid);
+            State.AutoPlacedGuids.AddUnique(Guid);
         }
         else
         {
-            State.ExplicitlyPlacedGuids.Add(CreatedGuid);
+            State.ExplicitlyPlacedGuids.Add(Guid);
+        }
+    };
+    if ((bCreates || Edit == TEXT("add_event") || Edit == TEXT("add_function")) && Reply.bSuccess && Reply.Result.IsValid())
+    {
+        for (const TCHAR* Key : {TEXT("nodeGuid"), TEXT("eventNodeGuid"), TEXT("resultNodeGuid")})
+        {
+            FString CreatedGuid;
+            if (Reply.Result->TryGetStringField(Key, CreatedGuid))
+            {
+                RegisterCreatedGuid(CreatedGuid);
+            }
         }
     }
     if (Edit == TEXT("connect_pins"))
@@ -480,7 +496,8 @@ TArray<UEdGraphNode*> SettleAutoPlacedNodes(UBlueprint* Blueprint, const FBatchS
     return Pending;
 }
 
-void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
+void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State,
+                           TSharedPtr<FJsonObject>* OutDiagnostics)
 {
     if (!Blueprint)
     {
@@ -511,7 +528,86 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
         return State.ExistingGuids.Contains(GuidStr) && IsExistingEntryAnchor(Node);
     };
 
-    // Seed existing exec nodes that were rewired onto a new/misaligned predecessor or moved to a secondary exec pin.
+    // EW-007: snapshot comment box ownership per graph before seeding/expansion so batch rewiring
+    // never rips existing nodes out of untouched comment blocks or drags existing multi-entry merges.
+    TMap<UEdGraph*, TArray<McpGraphLayoutDiag::FCommentGroup>> CommentsByGraph;
+    TArray<UEdGraph*> AllGraphsForComments;
+    Blueprint->GetAllGraphs(AllGraphsForComments);
+    for (UEdGraph* Graph : AllGraphsForComments)
+    {
+        if (!Graph)
+        {
+            continue;
+        }
+        const TMap<const UEdGraphNode*, FBox2D> Boxes = McpGraphLayoutDiag::MeasureNodeBoxes(Graph);
+        CommentsByGraph.Add(Graph, McpGraphLayoutDiag::CollectCommentGroups(Graph, Boxes));
+    }
+    const auto OwnerCommentOf = [&CommentsByGraph](const UEdGraphNode* Node) -> UEdGraphNode_Comment*
+    {
+        if (!Node || !Node->GetGraph())
+        {
+            return nullptr;
+        }
+        if (const TArray<McpGraphLayoutDiag::FCommentGroup>* Groups = CommentsByGraph.Find(Node->GetGraph()))
+        {
+            return McpGraphLayoutDiag::FindPrimaryOwnerComment(Node, *Groups);
+        }
+        return nullptr;
+    };
+
+    // Track which nodes were explicitly rewired into a target in this batch.
+    TMap<UEdGraphNode*, TSet<UEdGraphNode*>> BatchExecSourcesOf;
+    for (const FBatchLinkChange& Change : State.LinkChanges)
+    {
+        if (!Change.bExec)
+        {
+            continue;
+        }
+        UEdGraphNode* FromNode = FindBatchNode(Blueprint, Change.FromGuid);
+        UEdGraphNode* ToNode = FindBatchNode(Blueprint, Change.ToGuid);
+        if (FromNode && ToNode && FromNode->GetGraph() == ToNode->GetGraph())
+        {
+            BatchExecSourcesOf.FindOrAdd(ToNode).Add(FromNode);
+        }
+    }
+
+    const auto HasUntouchedExternalExecPredecessor =
+        [&FreeNodes, &BatchExecSourcesOf](const UEdGraphNode* Node, const TSet<UEdGraphNode*>& ActiveExpanded) -> bool
+    {
+        const TSet<UEdGraphNode*>* BatchSources = BatchExecSourcesOf.Find(Node);
+        for (const UEdGraphPin* Pin : Node->Pins)
+        {
+            if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+            {
+                continue;
+            }
+            for (const UEdGraphPin* Linked : Pin->LinkedTo)
+            {
+                UEdGraphNode* Pred = Linked ? Linked->GetOwningNode() : nullptr;
+                if (!Pred || Pred->GetGraph() != Node->GetGraph())
+                {
+                    continue;
+                }
+                if (FreeNodes.Contains(Pred) || ActiveExpanded.Contains(Pred))
+                {
+                    continue;
+                }
+                if (BatchSources && BatchSources->Contains(Pred))
+                {
+                    continue;
+                }
+                // Any remaining exec predecessor is an untouched external path -> protect this merge node.
+                return true;
+            }
+        }
+        return false;
+    };
+
+    int32 ProtectedMergeBoundaryCount = 0;
+    int32 ProtectedCommentBoundaryCount = 0;
+
+    // Seed existing exec nodes that were rewired onto a new/misaligned predecessor or moved to a secondary exec pin,
+    // while strictly protecting existing multi-entry merge points and untouched comment boxes (EW-007).
     TSet<UEdGraphNode*> SeededExistingExec;
     for (const FBatchLinkChange& Change : State.LinkChanges)
     {
@@ -524,6 +620,18 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
         if (!FromNode || !ToNode || FromNode->GetGraph() != ToNode->GetGraph() || IsFixedAnchor(ToNode) ||
             FreeNodes.Contains(ToNode))
         {
+            continue;
+        }
+        if (HasUntouchedExternalExecPredecessor(ToNode, SeededExistingExec))
+        {
+            ++ProtectedMergeBoundaryCount;
+            continue;
+        }
+        UEdGraphNode_Comment* ToComment = OwnerCommentOf(ToNode);
+        UEdGraphNode_Comment* FromComment = OwnerCommentOf(FromNode);
+        if (ToComment && ToComment != FromComment)
+        {
+            ++ProtectedCommentBoundaryCount;
             continue;
         }
         bool bShouldReflowTarget = Change.bSecondaryExecOut;
@@ -545,7 +653,7 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
         }
     }
 
-    // Expand forward along affected exec chains up to untouched merge boundaries (preserving internal diamonds).
+    // Expand forward along affected exec chains up to untouched merge or comment boundaries (preserving internal diamonds).
     if (SeededExistingExec.Num() > 0)
     {
         constexpr int32 MaxExpandedExec = 96;
@@ -555,6 +663,7 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
         while (Open.Num() > 0 && ExpandedExec.Num() < MaxExpandedExec)
         {
             UEdGraphNode* Current = Open.Pop(EAllowShrinking::No);
+            UEdGraphNode_Comment* CurrentComment = OwnerCommentOf(Current);
             for (const UEdGraphPin* Pin : Current->Pins)
             {
                 if (!Pin || Pin->Direction != EGPD_Output || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
@@ -567,6 +676,12 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
                     if (!Next || Next->GetGraph() != Current->GetGraph() || IsFixedAnchor(Next) ||
                         VisitedExec.Contains(Next))
                     {
+                        continue;
+                    }
+                    UEdGraphNode_Comment* NextComment = OwnerCommentOf(Next);
+                    if (NextComment && NextComment != CurrentComment)
+                    {
+                        ++ProtectedCommentBoundaryCount;
                         continue;
                     }
                     VisitedExec.Add(Next);
@@ -582,40 +697,14 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
                 }
             }
         }
-        // Prune any non-seeded node that merges an untouched external exec path so untouched branches stay anchored.
+        // Prune ANY node (including seeded ones) that merges an untouched external exec path so untouched branches stay anchored.
         for (bool bPruned = true; bPruned;)
         {
             bPruned = false;
             TArray<UEdGraphNode*> ToRemove;
             for (UEdGraphNode* Node : ExpandedExec)
             {
-                if (SeededExistingExec.Contains(Node))
-                {
-                    continue;
-                }
-                bool bHasExternalExecIn = false;
-                for (const UEdGraphPin* Pin : Node->Pins)
-                {
-                    if (!Pin || Pin->Direction != EGPD_Input || Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
-                    {
-                        continue;
-                    }
-                    for (const UEdGraphPin* Linked : Pin->LinkedTo)
-                    {
-                        UEdGraphNode* Pred = Linked ? Linked->GetOwningNode() : nullptr;
-                        if (Pred && Pred->GetGraph() == Node->GetGraph() && !FreeNodes.Contains(Pred) &&
-                            !ExpandedExec.Contains(Pred))
-                        {
-                            bHasExternalExecIn = true;
-                            break;
-                        }
-                    }
-                    if (bHasExternalExecIn)
-                    {
-                        break;
-                    }
-                }
-                if (bHasExternalExecIn)
+                if (HasUntouchedExternalExecPredecessor(Node, ExpandedExec))
                 {
                     ToRemove.Add(Node);
                 }
@@ -623,6 +712,7 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
             for (UEdGraphNode* Node : ToRemove)
             {
                 ExpandedExec.Remove(Node);
+                ++ProtectedMergeBoundaryCount;
                 bPruned = true;
             }
         }
@@ -776,9 +866,53 @@ void LayoutAutoPlacedNodes(UBlueprint* Blueprint, const FBatchState& State)
             }
         }
     }
+    TSharedPtr<FJsonObject> DiagRoot = OutDiagnostics ? MakeShared<FJsonObject>().ToSharedPtr() : TSharedPtr<FJsonObject>();
+    TSharedPtr<FJsonObject> DiagGraphs = OutDiagnostics ? MakeShared<FJsonObject>().ToSharedPtr() : TSharedPtr<FJsonObject>();
     for (const TPair<UEdGraph*, TArray<UEdGraphNode*>>& Each : ByGraph)
     {
-        McpRuled::LayoutNodes(Each.Key, Each.Value);
+        TMap<const UEdGraphNode*, FVector2D> BeforePos;
+        for (const UEdGraphNode* Node : Each.Key->Nodes)
+        {
+            if (Node && !Node->IsA<UEdGraphNode_Comment>())
+            {
+                BeforePos.Add(Node, FVector2D(Node->NodePosX, Node->NodePosY));
+            }
+        }
+        const TArray<FString> BeforeFingerprint = OutDiagnostics
+            ? McpGraphLayoutDiag::BuildSemanticTopologyFingerprint(Each.Key)
+            : TArray<FString>();
+        McpRuled::FParams Params;
+        Params.bProtectExistingComments = true;
+        Params.bRouteBackwardExecs = true;
+        TArray<UEdGraphNode*> AddedNodes;
+        TArray<UEdGraphNode*> UpdatedComments;
+        FString Failure;
+        McpRuled::LayoutNodes(Each.Key, Each.Value, nullptr, &AddedNodes, nullptr, Params, &Failure, nullptr, &UpdatedComments);
+        if (DiagGraphs.IsValid())
+        {
+            TSet<UEdGraphNode*> ScopeSet(Each.Value);
+            ScopeSet.Append(AddedNodes);
+            const TArray<McpGraphLayoutDiag::FCommentGroup>* OrigComments = CommentsByGraph.Find(Each.Key);
+            const McpGraphLayoutDiag::FLayoutQualityReport Quality =
+                McpGraphLayoutDiag::AnalyzeGraphQuality(Each.Key, &ScopeSet, nullptr, OrigComments, &BeforePos);
+            const TArray<FString> AfterFingerprint = McpGraphLayoutDiag::BuildSemanticTopologyFingerprint(Each.Key);
+            TSharedRef<FJsonObject> GraphDiag = Quality.ToJson();
+            GraphDiag->SetBoolField(TEXT("topologyFingerprintMatched"), BeforeFingerprint == AfterFingerprint);
+            GraphDiag->SetNumberField(TEXT("addedNodes"), AddedNodes.Num());
+            GraphDiag->SetNumberField(TEXT("updatedComments"), UpdatedComments.Num());
+            if (!Failure.IsEmpty())
+            {
+                GraphDiag->SetStringField(TEXT("layoutFailure"), Failure);
+            }
+            DiagGraphs->SetObjectField(Each.Key->GetName(), GraphDiag);
+        }
+    }
+    if (DiagRoot.IsValid())
+    {
+        DiagRoot->SetNumberField(TEXT("protectedMergeBoundaries"), ProtectedMergeBoundaryCount);
+        DiagRoot->SetNumberField(TEXT("protectedCommentBoundaries"), ProtectedCommentBoundaryCount);
+        DiagRoot->SetObjectField(TEXT("graphs"), DiagGraphs);
+        *OutDiagnostics = DiagRoot;
     }
 }
 }

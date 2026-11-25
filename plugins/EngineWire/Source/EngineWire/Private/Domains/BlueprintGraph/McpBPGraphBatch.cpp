@@ -254,13 +254,18 @@ bool RunGraphBatch(FActionContext& Context, int32 MaxSteps, bool bCompile)
         return true;
     }
 
+    TSharedPtr<FJsonObject> LayoutDiagnostics;
     if (GetJsonBoolField(Context.Payload, TEXT("autoLayout"), true))
     {
-        LayoutAutoPlacedNodes(Context.Blueprint, State);
+        LayoutAutoPlacedNodes(Context.Blueprint, State, &LayoutDiagnostics);
     }
     TSharedPtr<FJsonObject> Result = McpHandlerUtils::CreateResultObject();
     McpSetBatchSteps(Result, Results, NodeIds);
     Result->SetNumberField(TEXT("succeeded"), Results.Num());
+    if (LayoutDiagnostics.IsValid())
+    {
+        Result->SetObjectField(TEXT("layoutDiagnostics"), LayoutDiagnostics);
+    }
     // A step's warning (a Target pin now holding two objects) sat in results[], where no receipt check looks.
     TArray<TSharedPtr<FJsonValue>> Warnings;
     for (const TSharedPtr<FJsonValue>& Value : Results)

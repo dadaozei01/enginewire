@@ -48,6 +48,7 @@ struct FLink
     int32 To = INDEX_NONE;
     int32 ToPin = 0;
     bool bExec = false;
+    bool bDelegate = false;
 };
 
 /** A row break: the exec wire Links[Link] runs through reroutes centred at A (right of the row) then B (left of the next). */
@@ -85,6 +86,14 @@ struct FParams
     float RegionGap = 128.0f;
     /** A row is broken before the node that would make it wider than this. */
     float MaxRowWidth = 6000.0f;
+    /** Route backward exec loops / leftward cross-event exec merges through outer corridor auto-knots. */
+    bool bRouteBackwardExecs = true;
+    /** Treat untouched existing comment boxes as locked obstacles and sync/refit comments whose members move. */
+    bool bProtectExistingComments = true;
+    /** Collapse EngineWire-owned auto-exec knots before re-solving for idempotent repeated layouts. */
+    bool bCollapseAutoExecKnots = true;
+    /** Solve and validate only without mutating node positions, knots, or comments. */
+    bool bPreviewOnly = false;
 };
 
 struct FProblem
@@ -115,11 +124,16 @@ FSolution Solve(const FProblem& Problem, const FParams& Params = FParams());
 /** Normal-detail native Slate pin centres and body size, with a complete estimate fallback when unavailable. */
 FShape EstimateShape(const UEdGraphNode& Node);
 
+/** Measure shapes for every non-comment node in a graph using a single shared Slate measure context (O(N)). */
+void MeasureGraphShapes(const UEdGraph* Graph, TMap<const UEdGraphNode*, FShape>& OutShapes);
+
 /** Places Free in Graph by Solve; every other node stays where it is, unless an insert between two of them needs room. A block wired to nothing that stays starts at
  *  Origin, or left of and below the graph when Origin is null. Nodes in Ignore (about to be removed) are treated as
  *  absent. Row breaks add two reroute nodes each (appended to OutAdded). Returns the lowest bottom edge of the placed
  *  nodes, or Origin's Y when none was placed. */
 float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVector2D* Origin = nullptr,
                   TArray<UEdGraphNode*>* OutAdded = nullptr, const TSet<UEdGraphNode*>* Ignore = nullptr,
-                  const FParams& Params = FParams(), FString* OutFailure = nullptr);
+                  const FParams& Params = FParams(), FString* OutFailure = nullptr,
+                  TMap<UEdGraphNode*, FIntPoint>* OutPreviewPositions = nullptr,
+                  TArray<UEdGraphNode*>* OutUpdatedComments = nullptr);
 } // namespace McpRuled
