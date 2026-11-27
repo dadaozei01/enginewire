@@ -2,9 +2,48 @@
 
 namespace McpNiagaraAuthoringHandlers
 {
+bool ResolveNiagaraEnumValue(const UEnum* Enum, const TSharedPtr<FJsonValue>& Value, int32& OutIntValue, FString& OutError)
+{
+    if (!Enum)
+    {
+        OutError = TEXT("Enum definition is missing.");
+        return false;
+    }
+    FString Text;
+    double Num = 0.0;
+    const bool bText = Value.IsValid() && Value->Type == EJson::String && Value->TryGetString(Text);
+    const bool bNum = Value.IsValid() && Value->Type == EJson::Number && Value->TryGetNumber(Num);
+    TArray<FString> Allowed;
+    const int32 Count = Enum->ContainsExistingMax() ? Enum->NumEnums() - 1 : Enum->NumEnums();
+    for (int32 Index = 0; Index < Count; ++Index)
+    {
+        const int64 EntryValue = Enum->GetValueByIndex(Index);
+        const FString Display = Enum->GetDisplayNameTextByIndex(Index).ToString();
+        const FString FullName = Enum->GetNameStringByIndex(Index);
+        const FString ShortName = Enum->GetNameStringByValue(EntryValue);
+        const bool bHidden = Enum->HasMetaData(TEXT("Hidden"), Index);
+        if (!bHidden)
+        {
+            Allowed.Add(Display.IsEmpty() ? ShortName : Display);
+        }
+        if (bNum && FMath::IsFinite(Num) && Num == FMath::FloorToDouble(Num) && EntryValue == static_cast<int64>(Num))
+        {
+            OutIntValue = static_cast<int32>(EntryValue);
+            return true;
+        }
+        if (bText && (Text.Equals(Display, ESearchCase::IgnoreCase) || Text.Equals(ShortName, ESearchCase::IgnoreCase) || Text.Equals(FullName, ESearchCase::IgnoreCase)))
+        {
+            OutIntValue = static_cast<int32>(EntryValue);
+            return true;
+        }
+    }
+    OutError = FString::Printf(TEXT("Invalid enum value for '%s'. Valid options: %s."), *Enum->GetName(), *FString::Join(Allowed, TEXT(", ")));
+    return false;
+}
+
 // One parameter-store value (user or rapid-iteration) in the variable's own type. Position types are skipped: the
 // store asserts unless it already tracks position data under that name. Payload holds parameterValue.
-static bool WriteRapidIterationValue(FNiagaraParameterStore& Store, const FNiagaraVariable& Var, const TSharedPtr<FJsonObject>& Payload)
+static bool WriteRapidIterationValue(FNiagaraParameterStore& Store, const FNiagaraVariable& Var, const TSharedPtr<FJsonObject>& Payload, FString& OutError)
 {
     const FNiagaraTypeDefinition& Type = Var.GetType();
     double Num = 0;
@@ -16,7 +55,21 @@ static bool WriteRapidIterationValue(FNiagaraParameterStore& Store, const FNiaga
     Payload->TryGetObjectField(TEXT("parameterValue"), Obj);
     Payload->TryGetArrayField(TEXT("parameterValue"), Arr);
     if (Type == FNiagaraTypeDefinition::GetFloatDef() && bNum) return Store.SetParameterValue(static_cast<float>(Num), Var);
-    if ((Type == FNiagaraTypeDefinition::GetIntDef() || Type.IsEnum()) && bNum) return Store.SetParameterValue(static_cast<int32>(Num), Var);
+    if (Type.IsEnum())
+    {
+        int32 EnumInt = 0;
+        if (const UEnum* Enum = Type.GetEnum())
+        {
+            if (!ResolveNiagaraEnumValue(Enum, Payload->TryGetField(TEXT("parameterValue")), EnumInt, OutError))
+            {
+                return false;
+            }
+            return Store.SetParameterValue(EnumInt, Var);
+        }
+        if (bNum) return Store.SetParameterValue(static_cast<int32>(Num), Var);
+        return false;
+    }
+    if (Type == FNiagaraTypeDefinition::GetIntDef() && bNum) return Store.SetParameterValue(static_cast<int32>(Num), Var);
     if (Type == FNiagaraTypeDefinition::GetBoolDef() && (bBool || bNum)) return Store.SetParameterValue(FNiagaraBool(bBool ? Bool : Num != 0.0), Var);
     // Vector-like values come as an object or, like every other vector here, as an array.
     if (!Obj && !(Arr && Arr->Num() >= 2)) return false;
@@ -35,7 +88,15 @@ static bool WriteRapidIterationValue(FNiagaraParameterStore& Store, const FNiaga
 // mirrored into the system scripts, so every copy is written - what the Niagara stack editor does.
 // Returns the number of copies written; fills Candidates with the names that did not match and
 // MatchedType with the type of a match whose value could not be converted. The caller requests the compile.
+int32 SetModuleInputValue(UNiagaraSystem* System, const FString& EmitterName, const FString& ParamName, const TSharedPtr<FJsonObject>& Payload, TArray<FString>& Candidates, FString& MatchedType, FString& OutValueError);
+
 int32 SetModuleInputValue(UNiagaraSystem* System, const FString& EmitterName, const FString& ParamName, const TSharedPtr<FJsonObject>& Payload, TArray<FString>& Candidates, FString& MatchedType)
+{
+    FString UnusedError;
+    return SetModuleInputValue(System, EmitterName, ParamName, Payload, Candidates, MatchedType, UnusedError);
+}
+
+int32 SetModuleInputValue(UNiagaraSystem* System, const FString& EmitterName, const FString& ParamName, const TSharedPtr<FJsonObject>& Payload, TArray<FString>& Candidates, FString& MatchedType, FString& OutValueError)
 {
     const TArray<UNiagaraScript*> Scripts = GatherModuleInputScripts(System);
     const FString Scope = EmitterName.IsEmpty() ? FString() : TEXT("Constants.") + EmitterName + TEXT(".");
@@ -51,11 +112,79 @@ int32 SetModuleInputValue(UNiagaraSystem* System, const FString& EmitterName, co
                 Candidates.AddUnique(Name);
                 continue;
             }
-            Script->Modify();
             MatchedType = Entry.GetType().GetName();
-            Written += WriteRapidIterationValue(Script->RapidIterationParameters, FNiagaraVariable(Entry), Payload) ? 1 : 0;
+            FString ValueError;
+            if (Entry.GetType().IsEnum())
+            {
+                int32 UnusedEnum = 0;
+                if (const UEnum* Enum = Entry.GetType().GetEnum(); Enum && !ResolveNiagaraEnumValue(Enum, Payload->TryGetField(TEXT("parameterValue")), UnusedEnum, ValueError))
+                {
+                    OutValueError = ValueError;
+                    return 0;
+                }
+            }
+            Script->Modify();
+            Written += WriteRapidIterationValue(Script->RapidIterationParameters, FNiagaraVariable(Entry), Payload, ValueError) ? 1 : 0;
+            if (!ValueError.IsEmpty() && OutValueError.IsEmpty()) OutValueError = ValueError;
         }
     }
+#if MCP_HAS_NIAGARA_INPUT_OVERRIDES
+    // Fallback: a module input (such as Collision.CPU Collision Trace Channel) may not be in RapidIterationParameters
+    // until it is first overridden. Locate it on the module's called graph, validate first, then add & write.
+    if (Written == 0 && MatchedType.IsEmpty())
+    {
+        FString ModuleName, BareParam;
+        if (ParamName.Split(TEXT("."), &ModuleName, &BareParam))
+        {
+            for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+            {
+                const FString HandleName = Handle.GetName().ToString();
+                if (!EmitterName.IsEmpty() && HandleName != EmitterName) continue;
+                UNiagaraScriptSource* Source = GetEmitterScriptSource(const_cast<FNiagaraEmitterHandle*>(&Handle));
+                if (!Source || !Source->NodeGraph) continue;
+                for (UEdGraphNode* GraphNode : Source->NodeGraph->Nodes)
+                {
+                    UNiagaraNodeFunctionCall* Node = Cast<UNiagaraNodeFunctionCall>(GraphNode);
+                    if (!Node || !Node->FunctionScript || !Node->GetFunctionName().Equals(ModuleName, ESearchCase::IgnoreCase)) continue;
+                    FNiagaraVariable InputVar;
+                    if (!FindModuleInput(Node, ParamName, InputVar)) continue;
+                    MatchedType = InputVar.GetType().GetName();
+                    if (InputVar.GetType().IsEnum())
+                    {
+                        int32 UnusedEnum = 0;
+                        if (const UEnum* Enum = InputVar.GetType().GetEnum(); Enum && !ResolveNiagaraEnumValue(Enum, Payload->TryGetField(TEXT("parameterValue")), UnusedEnum, OutValueError))
+                        {
+                            return 0;
+                        }
+                    }
+                    const FString RapidName = TEXT("Constants.") + HandleName + TEXT(".") + Node->GetFunctionName() + TEXT(".") + BareInputName(InputVar.GetName().ToString());
+                    const FNiagaraVariable RapidVar(InputVar.GetType(), FName(*RapidName));
+                    TArray<UNiagaraScript*> TargetScripts;
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
+                    if (MCP_NIAGARA_EMITTER_DATA_TYPE* EmData = MCP_GET_EMITTER_DATA(Handle))
+                    {
+                        EmData->GetScripts(TargetScripts, false);
+                    }
+#endif
+                    TargetScripts.AddUnique(System->GetSystemSpawnScript());
+                    TargetScripts.AddUnique(System->GetSystemUpdateScript());
+                    for (UNiagaraScript* Script : TargetScripts)
+                    {
+                        if (!Script) continue;
+                        Script->Modify();
+                        Script->RapidIterationParameters.AddParameter(RapidVar, true, false);
+                        FString ValueError;
+                        Written += WriteRapidIterationValue(Script->RapidIterationParameters, RapidVar, Payload, ValueError) ? 1 : 0;
+                    }
+                    if (Written > 0)
+                    {
+                        Node->MarkNodeRequiresSynchronization(TEXT("Module input override added over MCP"), true);
+                    }
+                }
+            }
+        }
+    }
+#endif
     return Written;
 }
 
@@ -90,18 +219,20 @@ static FParameterWrite WriteParameter(UNiagaraSystem* System, const FString& Emi
     const FNiagaraVariableWithOffset* UserVar = FindUserParameter(System, ParamName);
     if (UserVar)
     {
-        Write.bApplied = WriteRapidIterationValue(System->GetExposedParameters(), FNiagaraVariable(*UserVar), Entry);
+        FString ValueError;
+        Write.bApplied = WriteRapidIterationValue(System->GetExposedParameters(), FNiagaraVariable(*UserVar), Entry, ValueError);
         if (!Write.bApplied)
         {
             Write.ErrorCode = TEXT("PARAM_TYPE_MISMATCH");
-            Write.Error = FString::Printf(TEXT("User parameter '%s' is a %s; %s"), *ParamName, *UserVar->GetType().GetName(), ValueForms);
+            Write.Error = !ValueError.IsEmpty() ? ValueError : FString::Printf(TEXT("User parameter '%s' is a %s; %s"), *ParamName, *UserVar->GetType().GetName(), ValueForms);
         }
         return Write;
     }
     // Not a user parameter: try the module inputs, which is what tuning a template emitter needs.
     TArray<FString> Candidates;
     FString MatchedType;
-    Write.InputCopies = SetModuleInputValue(System, EmitterName, ParamName, Entry, Candidates, MatchedType);
+    FString ValueError;
+    Write.InputCopies = SetModuleInputValue(System, EmitterName, ParamName, Entry, Candidates, MatchedType, ValueError);
     // Nor a module input: a module's static switch ("InitializeParticle.Ribbon Width Mode"), which gates inputs.
     FString SwitchError;
     if (Write.InputCopies == 0 && MatchedType.IsEmpty())
@@ -114,6 +245,11 @@ static FParameterWrite WriteParameter(UNiagaraSystem* System, const FString& Emi
         return Write;
     }
     Write.ErrorCode = MatchedType.IsEmpty() && SwitchError.IsEmpty() ? TEXT("PARAM_NOT_FOUND") : TEXT("PARAM_TYPE_MISMATCH");
+    if (!ValueError.IsEmpty())
+    {
+        Write.Error = ValueError;
+        return Write;
+    }
     if (!SwitchError.IsEmpty())
     {
         Write.Error = SwitchError;

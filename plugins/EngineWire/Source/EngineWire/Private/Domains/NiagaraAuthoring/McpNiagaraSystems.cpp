@@ -1,4 +1,6 @@
 #include "Domains/NiagaraAuthoring/McpNiagaraContext.h"
+#include "EdGraphSchema_Niagara.h"
+#include "Algo/Reverse.h"
 #include "Domains/NiagaraAuthoring/McpNiagaraCreatePackage.h"
 #include "NiagaraSpriteRendererProperties.h"
 
@@ -269,7 +271,11 @@ static bool SetEmitterProperties(FActionContext& Context)
                         Module->GetFunctionName().Equals(ModuleName, ESearchCase::IgnoreCase))
                     {
                         Module->Modify();
+#if MCP_HAS_NIAGARA_STACK_GRAPH_UTILITIES
+                        FNiagaraStackGraphUtilities::SetModuleIsEnabled(*Module, bOn);
+#else
                         Module->SetEnabledState(bOn ? ENodeEnabledState::Enabled : ENodeEnabledState::Disabled, false);
+#endif
                         Module->MarkNodeRequiresSynchronization(TEXT("Module enabled state changed"), true);
                         ++Matched;
                     }
@@ -310,12 +316,281 @@ static bool SetEmitterProperties(FActionContext& Context)
     return true;
 }
 
+namespace
+{
+struct FNiagaraStackBlock
+{
+    UNiagaraNodeFunctionCall* Module = nullptr;
+    UEdGraphNode* HeadNode = nullptr; // NiagaraNodeParameterMapSet if present, else Module
+    UEdGraphPin* HeadInPin = nullptr;
+    UEdGraphPin* TailOutPin = nullptr;
+};
+
+UEdGraphPin* StackMapPin(UEdGraphNode* Node, EEdGraphPinDirection Direction)
+{
+    if (!Node) return nullptr;
+    for (UEdGraphPin* Pin : Node->Pins)
+    {
+        if (Pin && Pin->Direction == Direction && !Pin->bOrphanedPin
+            && UEdGraphSchema_Niagara::PinToTypeDefinition(Pin) == FNiagaraTypeDefinition::GetParameterMapDef())
+        {
+            return Pin;
+        }
+    }
+    return nullptr;
+}
+
+const TCHAR* StackStageName(ENiagaraScriptUsage Usage)
+{
+    switch (Usage)
+    {
+    case ENiagaraScriptUsage::ParticleSpawnScript:
+    case ENiagaraScriptUsage::ParticleSpawnScriptInterpolated: return TEXT("ParticleSpawn");
+    case ENiagaraScriptUsage::ParticleUpdateScript: return TEXT("ParticleUpdate");
+    case ENiagaraScriptUsage::ParticleEventScript: return TEXT("ParticleEvent");
+    case ENiagaraScriptUsage::ParticleSimulationStageScript: return TEXT("ParticleSimulationStage");
+    case ENiagaraScriptUsage::EmitterSpawnScript: return TEXT("EmitterSpawn");
+    case ENiagaraScriptUsage::EmitterUpdateScript: return TEXT("EmitterUpdate");
+    case ENiagaraScriptUsage::SystemSpawnScript: return TEXT("SystemSpawn");
+    case ENiagaraScriptUsage::SystemUpdateScript: return TEXT("SystemUpdate");
+    default: return TEXT("Other");
+    }
+}
+
+bool CollectStageBlocks(UNiagaraNodeOutput* Output, TArray<FNiagaraStackBlock>& OutBlocks)
+{
+    OutBlocks.Reset();
+    UEdGraphPin* In = StackMapPin(Output, EGPD_Input);
+    TSet<UEdGraphNode*> Seen;
+    while (In && In->LinkedTo.Num() == 1 && In->LinkedTo[0])
+    {
+        UEdGraphNode* Prev = In->LinkedTo[0]->GetOwningNode();
+        if (!Prev || Seen.Contains(Prev)) break;
+        Seen.Add(Prev);
+        UNiagaraNodeFunctionCall* Call = Cast<UNiagaraNodeFunctionCall>(Prev);
+        if (Call && Call->FunctionScript && Call->GetCalledUsage() == ENiagaraScriptUsage::Module)
+        {
+            FNiagaraStackBlock Block;
+            Block.Module = Call;
+            Block.TailOutPin = StackMapPin(Call, EGPD_Output);
+            Block.HeadNode = Call;
+            Block.HeadInPin = StackMapPin(Call, EGPD_Input);
+            if (Block.HeadInPin && Block.HeadInPin->LinkedTo.Num() == 1 && Block.HeadInPin->LinkedTo[0])
+            {
+                UEdGraphNode* MaybeSet = Block.HeadInPin->LinkedTo[0]->GetOwningNode();
+                if (MaybeSet && MaybeSet->GetClass()->GetName() == TEXT("NiagaraNodeParameterMapSet"))
+                {
+                    UEdGraphPin* SetIn = StackMapPin(MaybeSet, EGPD_Input);
+                    UEdGraphPin* SetOut = StackMapPin(MaybeSet, EGPD_Output);
+                    if (SetIn && SetIn->LinkedTo.Num() == 1 && SetOut && SetOut->LinkedTo.Num() == 1)
+                    {
+                        Block.HeadNode = MaybeSet;
+                        Block.HeadInPin = SetIn;
+                    }
+                }
+            }
+            OutBlocks.Add(Block);
+            In = Block.HeadInPin;
+        }
+        else
+        {
+            In = StackMapPin(Prev, EGPD_Input);
+        }
+    }
+    Algo::Reverse(OutBlocks);
+    return OutBlocks.Num() > 0;
+}
+
+bool FindModuleBlock(UNiagaraGraph* Graph, const FString& ModuleName, const FString& StageFilter,
+    UNiagaraNodeOutput*& OutOutput, TArray<FNiagaraStackBlock>& OutBlocks, int32& OutIndex)
+{
+    TArray<UNiagaraNodeOutput*> Outputs;
+    Graph->GetNodesOfClass(Outputs);
+    for (UNiagaraNodeOutput* Output : Outputs)
+    {
+        if (!StageFilter.IsEmpty() && !FString(StackStageName(Output->GetUsage())).Equals(StageFilter, ESearchCase::IgnoreCase))
+        {
+            continue;
+        }
+        TArray<FNiagaraStackBlock> Blocks;
+        CollectStageBlocks(Output, Blocks);
+        for (int32 Idx = 0; Idx < Blocks.Num(); ++Idx)
+        {
+            if (Blocks[Idx].Module->GetFunctionName().Equals(ModuleName, ESearchCase::IgnoreCase))
+            {
+                OutOutput = Output;
+                OutBlocks = MoveTemp(Blocks);
+                OutIndex = Idx;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+} // namespace
+
+static bool RemoveNiagaraModule(FActionContext& Context)
+{
+    const FString ModuleName = GetJsonStringField(Context.Payload, TEXT("moduleName"));
+    const FString StageFilter = GetJsonStringField(Context.Payload, TEXT("stage"));
+    if (ModuleName.IsEmpty())
+    {
+        Context.SendError(TEXT("Missing 'moduleName'."), TEXT("INVALID_ARGUMENT"));
+        return true;
+    }
+    UNiagaraSystem* System = nullptr;
+    FNiagaraEmitterHandle* Handle = nullptr;
+    if (!LoadSystemAndEmitter(Context, System, Handle)) return true;
+    UNiagaraScriptSource* Source = GetEmitterScriptSource(Handle);
+    UNiagaraGraph* Graph = Source ? Source->NodeGraph : nullptr;
+    if (!Graph)
+    {
+        Context.SendError(TEXT("Emitter has no Niagara graph source."), TEXT("NIAGARA_GRAPH_MISSING"));
+        return true;
+    }
+    UNiagaraNodeOutput* Output = nullptr;
+    TArray<FNiagaraStackBlock> Blocks;
+    int32 Index = INDEX_NONE;
+    if (!FindModuleBlock(Graph, ModuleName, StageFilter, Output, Blocks, Index))
+    {
+        Context.SendError(FString::Printf(TEXT("Module '%s' not found on emitter '%s'%s."), *ModuleName, *Context.EmitterName,
+            StageFilter.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" in stage '%s'"), *StageFilter)), TEXT("MODULE_NOT_FOUND"));
+        return true;
+    }
+    FNiagaraStackBlock& Block = Blocks[Index];
+    if (!Block.HeadInPin || Block.HeadInPin->LinkedTo.Num() != 1 || !Block.TailOutPin || Block.TailOutPin->LinkedTo.Num() != 1)
+    {
+        Context.SendError(TEXT("Module parameter-map links are not a simple chain; cannot safely remove."), TEXT("NOT_SUPPORTED"));
+        return true;
+    }
+    UEdGraphPin* PrevOut = Block.HeadInPin->LinkedTo[0];
+    UEdGraphPin* NextIn = Block.TailOutPin->LinkedTo[0];
+    Graph->Modify();
+    Block.HeadInPin->BreakLinkTo(PrevOut);
+    Block.TailOutPin->BreakLinkTo(NextIn);
+    PrevOut->MakeLinkTo(NextIn);
+
+    if (Block.HeadNode && Block.HeadNode != Block.Module)
+    {
+        for (UEdGraphPin* Pin : Block.HeadNode->Pins)
+        {
+            if (Pin && Pin->Direction == EGPD_Input && Pin != Block.HeadInPin)
+            {
+                TArray<UEdGraphNode*> Feeders;
+                for (UEdGraphPin* Linked : Pin->LinkedTo) Feeders.AddUnique(Linked->GetOwningNode());
+                Pin->BreakAllPinLinks();
+                for (UEdGraphNode* Feeder : Feeders)
+                {
+                    if (Feeder && !Feeder->Pins.ContainsByPredicate([](const UEdGraphPin* P) { return P->Direction == EGPD_Output && P->LinkedTo.Num() > 0; }))
+                    {
+                        Graph->RemoveNode(Feeder);
+                    }
+                }
+            }
+        }
+        Graph->RemoveNode(Block.HeadNode);
+    }
+    Graph->RemoveNode(Block.Module);
+    Graph->NotifyGraphChanged();
+    System->RequestCompile(false);
+    MarkDirtyAndVerify(Context, System);
+    Context.Result->SetStringField(TEXT("moduleName"), ModuleName);
+    Context.Result->SetStringField(TEXT("stage"), StackStageName(Output->GetUsage()));
+    Context.Result->SetBoolField(TEXT("removed"), true);
+    Context.SendSuccess(true, FString::Printf(TEXT("Removed module '%s' from %s."), *ModuleName, StackStageName(Output->GetUsage())));
+    return true;
+}
+
+static bool ReorderNiagaraModule(FActionContext& Context)
+{
+    const FString ModuleName = GetJsonStringField(Context.Payload, TEXT("moduleName"));
+    const FString StageFilter = GetJsonStringField(Context.Payload, TEXT("stage"));
+    double TargetIndexNum = -1.0;
+    if (ModuleName.IsEmpty() || !Context.Payload->TryGetNumberField(TEXT("targetIndex"), TargetIndexNum)
+        || TargetIndexNum < 0.0 || TargetIndexNum != FMath::FloorToDouble(TargetIndexNum))
+    {
+        Context.SendError(TEXT("Missing 'moduleName' or non-negative integer 'targetIndex'."), TEXT("INVALID_ARGUMENT"));
+        return true;
+    }
+    const int32 TargetIndex = static_cast<int32>(TargetIndexNum);
+    UNiagaraSystem* System = nullptr;
+    FNiagaraEmitterHandle* Handle = nullptr;
+    if (!LoadSystemAndEmitter(Context, System, Handle)) return true;
+    UNiagaraScriptSource* Source = GetEmitterScriptSource(Handle);
+    UNiagaraGraph* Graph = Source ? Source->NodeGraph : nullptr;
+    if (!Graph)
+    {
+        Context.SendError(TEXT("Emitter has no Niagara graph source."), TEXT("NIAGARA_GRAPH_MISSING"));
+        return true;
+    }
+    UNiagaraNodeOutput* Output = nullptr;
+    TArray<FNiagaraStackBlock> Blocks;
+    int32 CurrentIndex = INDEX_NONE;
+    if (!FindModuleBlock(Graph, ModuleName, StageFilter, Output, Blocks, CurrentIndex))
+    {
+        Context.SendError(FString::Printf(TEXT("Module '%s' not found on emitter '%s'."), *ModuleName, *Context.EmitterName), TEXT("MODULE_NOT_FOUND"));
+        return true;
+    }
+    if (TargetIndex >= Blocks.Num())
+    {
+        Context.SendError(FString::Printf(TEXT("targetIndex %d out of range [0, %d]."), TargetIndex, Blocks.Num() - 1), TEXT("INVALID_ARGUMENT"));
+        return true;
+    }
+    if (CurrentIndex == TargetIndex)
+    {
+        Context.Result->SetStringField(TEXT("moduleName"), ModuleName);
+        Context.Result->SetNumberField(TEXT("previousIndex"), CurrentIndex);
+        Context.Result->SetNumberField(TEXT("targetIndex"), TargetIndex);
+        Context.Result->SetBoolField(TEXT("moved"), false);
+        Context.SendSuccess(true, TEXT("Module is already at targetIndex."));
+        return true;
+    }
+
+    FNiagaraStackBlock Moved = Blocks[CurrentIndex];
+    if (!Moved.HeadInPin || Moved.HeadInPin->LinkedTo.Num() != 1 || !Moved.TailOutPin || Moved.TailOutPin->LinkedTo.Num() != 1)
+    {
+        Context.SendError(TEXT("Module parameter-map links are not a simple chain; cannot safely reorder."), TEXT("NOT_SUPPORTED"));
+        return true;
+    }
+    Graph->Modify();
+    UEdGraphPin* OldPrevOut = Moved.HeadInPin->LinkedTo[0];
+    UEdGraphPin* OldNextIn = Moved.TailOutPin->LinkedTo[0];
+    Moved.HeadInPin->BreakLinkTo(OldPrevOut);
+    Moved.TailOutPin->BreakLinkTo(OldNextIn);
+    OldPrevOut->MakeLinkTo(OldNextIn);
+
+    Blocks.RemoveAt(CurrentIndex);
+    UEdGraphPin* DestInPin = (TargetIndex == Blocks.Num()) ? StackMapPin(Output, EGPD_Input) : Blocks[TargetIndex].HeadInPin;
+    UEdGraphPin* DestOutPin = (DestInPin && DestInPin->LinkedTo.Num() == 1) ? DestInPin->LinkedTo[0] : nullptr;
+    if (!DestInPin || !DestOutPin)
+    {
+        Context.SendError(TEXT("Destination stack link is invalid."), TEXT("NIAGARA_GRAPH_INVALID"));
+        return true;
+    }
+    DestOutPin->BreakLinkTo(DestInPin);
+    DestOutPin->MakeLinkTo(Moved.HeadInPin);
+    Moved.TailOutPin->MakeLinkTo(DestInPin);
+
+    Graph->NotifyGraphChanged();
+    System->RequestCompile(false);
+    MarkDirtyAndVerify(Context, System);
+    Context.Result->SetStringField(TEXT("moduleName"), ModuleName);
+    Context.Result->SetStringField(TEXT("stage"), StackStageName(Output->GetUsage()));
+    Context.Result->SetNumberField(TEXT("previousIndex"), CurrentIndex);
+    Context.Result->SetNumberField(TEXT("targetIndex"), TargetIndex);
+    Context.Result->SetBoolField(TEXT("moved"), true);
+    Context.SendSuccess(true, FString::Printf(TEXT("Moved '%s' from index %d to %d in %s."), *ModuleName, CurrentIndex, TargetIndex, StackStageName(Output->GetUsage())));
+    return true;
+}
+
 bool HandleSystemEmitterAction(FActionContext& Context, const FString& SubAction)
 {
     if (SubAction == TEXT("create_niagara_system")) return CreateNiagaraSystem(Context);
     if (SubAction == TEXT("create_niagara_emitter")) return CreateNiagaraEmitter(Context);
     if (SubAction == TEXT("add_emitter_to_system")) return AddEmitterToSystem(Context);
     if (SubAction == TEXT("set_emitter_properties")) return SetEmitterProperties(Context);
+    if (SubAction == TEXT("remove_niagara_module")) return RemoveNiagaraModule(Context);
+    if (SubAction == TEXT("reorder_niagara_module")) return ReorderNiagaraModule(Context);
     return false;
 }
 }

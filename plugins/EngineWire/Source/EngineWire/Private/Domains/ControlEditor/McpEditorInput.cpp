@@ -59,7 +59,7 @@ void ScheduleKeyReleaseForMcp(const FString &Key, double HoldSeconds,
         // down for the whole 600 s grace and the focused button, which clicks on key up, never clicked. The
         // editor's pause is not that: step_frame runs game time through it, and a jump held across stepped
         // frames let go on the wall clock before the first step.
-        const AWorldSettings *Settings = bWorldGone ? nullptr : Live->GetWorldSettings();
+        const AWorldSettings *Settings = (bWorldGone || Live == nullptr) ? nullptr : Live->GetWorldSettings();
         const bool bGameClock = bGameTime && !bWorldGone && !(Settings && Settings->GetPauserPlayerState());
         const bool bHolding = !bWorldGone &&
             (GFrameCounter < MinReleaseFrame ||

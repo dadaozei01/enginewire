@@ -272,7 +272,7 @@ void AddEmitterModuleInfo(TSharedPtr<FJsonObject>& EmitterObj, const FNiagaraEmi
 // moduleNames keeps only those modules' inputs and switches ("Collision"): a whole system's dump ran to 15 KB.
 void KeepModuleEntries(const TSharedPtr<FJsonObject>& EmitterObj, const TArray<FString>& ModuleNames)
 {
-    for (const TCHAR* FieldName : {TEXT("moduleInputs"), TEXT("staticSwitches")})
+    for (const TCHAR* FieldName : {TEXT("moduleInputs"), TEXT("staticSwitches"), TEXT("enumOptions")})
     {
         const TSharedPtr<FJsonObject>* Field = nullptr;
         if (ModuleNames.Num() == 0 || !EmitterObj->TryGetObjectField(FieldName, Field) || !Field)

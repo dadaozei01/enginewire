@@ -191,6 +191,8 @@ bool AddDataInterfaceUserParameter(UNiagaraSystem* System, const FString& ParamN
 bool HasUserParameterNamed(UNiagaraSystem* System, const FString& ParamName);
 // A parameter's value in its own type: a number, a bool, or an array for a vector or colour; null for other types.
 TSharedPtr<FJsonValue> ReadNiagaraValue(const FNiagaraParameterStore& Store, const FNiagaraVariable& Variable);
+TArray<FString> CollectNiagaraEnumOptions(const UEnum* Enum);
+bool ResolveNiagaraEnumValue(const UEnum* Enum, const TSharedPtr<FJsonValue>& Value, int32& OutIntValue, FString& OutError);
 // With actorName, puts the placed effect's own user parameter values (and the ones it overrides) under placed; false
 // after replying ACTOR_NOT_FOUND or COMPONENT_NOT_FOUND. Without actorName it does nothing and returns true.
 bool AddPlacedUserParameters(FActionContext& Context, UNiagaraSystem* System);

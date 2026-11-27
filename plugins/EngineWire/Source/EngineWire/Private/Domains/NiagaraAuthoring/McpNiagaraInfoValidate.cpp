@@ -1,9 +1,30 @@
 #include "Domains/NiagaraAuthoring/McpNiagaraContext.h"
+#include "EdGraphSchema_Niagara.h"
 #include "Foundation/Reflection/McpPropertyReflection.h"
 
 namespace McpNiagaraAuthoringHandlers
 {
-// A parameter's current value in its own type (int for an enum), or null for a type not rendered.
+TArray<FString> CollectNiagaraEnumOptions(const UEnum* Enum)
+{
+    TArray<FString> Options;
+    if (!Enum)
+    {
+        return Options;
+    }
+    const int32 Count = Enum->ContainsExistingMax() ? Enum->NumEnums() - 1 : Enum->NumEnums();
+    for (int32 Index = 0; Index < Count; ++Index)
+    {
+        if (Enum->HasMetaData(TEXT("Hidden"), Index))
+        {
+            continue;
+        }
+        const FString Display = Enum->GetDisplayNameTextByIndex(Index).ToString();
+        Options.Add(Display.IsEmpty() ? Enum->GetNameStringByIndex(Index) : Display);
+    }
+    return Options;
+}
+
+// A parameter's current value in its own type (enum by display name, int as number), or null for a type not rendered.
 TSharedPtr<FJsonValue> ReadNiagaraValue(const FNiagaraParameterStore& Store, const FNiagaraVariable& Variable)
 {
     const FNiagaraTypeDefinition& Type = Variable.GetType();
@@ -11,7 +32,25 @@ TSharedPtr<FJsonValue> ReadNiagaraValue(const FNiagaraParameterStore& Store, con
     if (!Data) return nullptr;
     // Floats as typed: a smoke colour of 0.035 read 0.03500000014901161.
     if (Type == FNiagaraTypeDefinition::GetFloatDef()) return MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(*reinterpret_cast<const float*>(Data)));
-    if (Type == FNiagaraTypeDefinition::GetIntDef() || Type.IsEnum()) return MakeShared<FJsonValueNumber>(*reinterpret_cast<const int32*>(Data));
+    if (Type.IsEnum())
+    {
+        const int32 Raw = *reinterpret_cast<const int32*>(Data);
+        if (const UEnum* Enum = Type.GetEnum())
+        {
+            const FString Display = Enum->GetDisplayNameTextByValue(Raw).ToString();
+            if (!Display.IsEmpty())
+            {
+                return MakeShared<FJsonValueString>(Display);
+            }
+            const FString Name = Enum->GetNameStringByValue(Raw);
+            if (!Name.IsEmpty())
+            {
+                return MakeShared<FJsonValueString>(Name);
+            }
+        }
+        return MakeShared<FJsonValueNumber>(Raw);
+    }
+    if (Type == FNiagaraTypeDefinition::GetIntDef()) return MakeShared<FJsonValueNumber>(*reinterpret_cast<const int32*>(Data));
     if (Type == FNiagaraTypeDefinition::GetBoolDef()) return MakeShared<FJsonValueBoolean>(reinterpret_cast<const FNiagaraBool*>(Data)->GetValue());
     const int32 Count = Type == FNiagaraTypeDefinition::GetVec2Def() ? 2
         : Type == FNiagaraTypeDefinition::GetVec3Def() ? 3
@@ -25,12 +64,101 @@ TSharedPtr<FJsonValue> ReadNiagaraValue(const FNiagaraParameterStore& Store, con
     return MakeShared<FJsonValueArray>(Components);
 }
 
+static TSharedPtr<FJsonValue> ParsePinDefaultToJson(const FNiagaraTypeDefinition& Type, const FString& DefaultValue)
+{
+    if (Type.IsEnum())
+    {
+        if (const UEnum* Enum = Type.GetEnum())
+        {
+            const int64 DefVal = Enum->GetValueByNameString(DefaultValue);
+            if (DefVal != INDEX_NONE)
+            {
+                return MakeShared<FJsonValueString>(Enum->GetDisplayNameTextByValue(DefVal).ToString());
+            }
+        }
+        return DefaultValue.IsEmpty() ? TSharedPtr<FJsonValue>() : MakeShared<FJsonValueString>(DefaultValue);
+    }
+    if (DefaultValue.IsEmpty()) return nullptr;
+    if (Type == FNiagaraTypeDefinition::GetFloatDef())
+    {
+        return MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(FCString::Atof(*DefaultValue)));
+    }
+    if (Type == FNiagaraTypeDefinition::GetIntDef())
+    {
+        return MakeShared<FJsonValueNumber>(FCString::Atoi(*DefaultValue));
+    }
+    if (Type == FNiagaraTypeDefinition::GetBoolDef())
+    {
+        return MakeShared<FJsonValueBoolean>(DefaultValue.ToBool());
+    }
+    if (Type == FNiagaraTypeDefinition::GetVec2Def())
+    {
+        FVector2D V;
+        if (V.InitFromString(DefaultValue))
+        {
+            return MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.X))),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.Y)))});
+        }
+    }
+    if (Type == FNiagaraTypeDefinition::GetVec3Def())
+    {
+        FVector V;
+        if (V.InitFromString(DefaultValue))
+        {
+            return MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.X))),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.Y))),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.Z)))});
+        }
+    }
+    if (Type == FNiagaraTypeDefinition::GetVec4Def())
+    {
+        FVector4 V;
+        if (V.InitFromString(DefaultValue))
+        {
+            return MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.X))),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.Y))),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.Z))),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(static_cast<float>(V.W)))});
+        }
+    }
+    if (Type == FNiagaraTypeDefinition::GetColorDef())
+    {
+        FLinearColor C;
+        if (C.InitFromString(DefaultValue))
+        {
+            return MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(C.R)),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(C.G)),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(C.B)),
+                MakeShared<FJsonValueNumber>(McpPropertyReflection::ReadableFloat(C.A))});
+        }
+    }
+    return nullptr;
+}
+
 // Module inputs with their current values, keyed Module.Input -- the names set_parameter_value
-// takes -- so an emitter can be tuned without guessing input names.
-static TSharedPtr<FJsonObject> CollectModuleInputs(const TArray<UNiagaraScript*>& Scripts, const FString& EmitterName)
+// takes -- so an emitter can be tuned without guessing input names. Also collects enum options for enum inputs.
+static TSharedPtr<FJsonObject> CollectModuleInputs(const TArray<UNiagaraScript*>& Scripts, const FNiagaraEmitterHandle& Handle, TSharedPtr<FJsonObject>& OutEnumOptions)
 {
     TSharedPtr<FJsonObject> Inputs = MakeShared<FJsonObject>();
-    const FString Scope = TEXT("Constants.") + EmitterName + TEXT(".");
+    OutEnumOptions = MakeShared<FJsonObject>();
+    const FString Scope = TEXT("Constants.") + Handle.GetName().ToString() + TEXT(".");
+    const auto AddEnumOpts = [&OutEnumOptions](const FString& Key, const UEnum* Enum)
+    {
+        if (!Enum || OutEnumOptions->HasField(Key)) return;
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        for (const FString& Opt : CollectNiagaraEnumOptions(Enum))
+        {
+            Arr.Add(MakeShared<FJsonValueString>(Opt));
+        }
+        if (Arr.Num() > 0)
+        {
+            OutEnumOptions->SetArrayField(Key, Arr);
+        }
+    };
     for (UNiagaraScript* Script : Scripts)
     {
         for (const FNiagaraVariableWithOffset& Entry : Script ? Script->RapidIterationParameters.ReadParameterVariables() : TArrayView<const FNiagaraVariableWithOffset>())
@@ -38,9 +166,48 @@ static TSharedPtr<FJsonObject> CollectModuleInputs(const TArray<UNiagaraScript*>
             const FString Name = Entry.GetName().ToString();
             const FString Short = Name.StartsWith(Scope) ? Name.RightChop(Scope.Len()) : FString();
             if (Short.IsEmpty() || Inputs->HasField(Short)) continue;
+            if (Entry.GetType().IsEnum())
+            {
+                AddEnumOpts(Short, Entry.GetType().GetEnum());
+            }
             if (TSharedPtr<FJsonValue> Value = ReadNiagaraValue(Script->RapidIterationParameters, FNiagaraVariable(Entry)))
             {
                 Inputs->SetField(Short, Value);
+            }
+        }
+    }
+    // Also surface un-overridden module inputs (enum, float, int, bool, vector, color) from module graphs when not yet in RapidIterationParameters.
+    if (UNiagaraScriptSource* Source = GetEmitterScriptSource(const_cast<FNiagaraEmitterHandle*>(&Handle)))
+    {
+        if (Source->NodeGraph)
+        {
+            for (UEdGraphNode* GraphNode : Source->NodeGraph->Nodes)
+            {
+                UNiagaraNodeFunctionCall* Node = Cast<UNiagaraNodeFunctionCall>(GraphNode);
+                UNiagaraGraph* CalledGraph = (Node && Node->FunctionScript && Node->GetCalledUsage() == ENiagaraScriptUsage::Module) ? Node->GetCalledGraph() : nullptr;
+                if (!CalledGraph) continue;
+                for (UEdGraphNode* InnerNode : CalledGraph->Nodes)
+                {
+                    for (UEdGraphPin* Pin : InnerNode->Pins)
+                    {
+                        if (!Pin || Pin->Direction != EGPD_Output) continue;
+                        FString PinName = Pin->PinName.ToString();
+                        if (!PinName.RemoveFromStart(TEXT("Module."), ESearchCase::IgnoreCase)) continue;
+                        const FNiagaraTypeDefinition Type = UEdGraphSchema_Niagara::PinToTypeDefinition(Pin);
+                        const FString Key = Node->GetFunctionName() + TEXT(".") + PinName;
+                        if (Type.IsEnum())
+                        {
+                            AddEnumOpts(Key, Type.GetEnum());
+                        }
+                        if (!Inputs->HasField(Key))
+                        {
+                            if (TSharedPtr<FJsonValue> DefaultVal = ParsePinDefaultToJson(Type, Pin->DefaultValue))
+                            {
+                                Inputs->SetField(Key, DefaultVal);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -199,7 +366,12 @@ static void AddSystemInfo(TSharedPtr<FJsonObject>& InfoObj, UNiagaraSystem* Syst
         TSharedPtr<FJsonObject> EmitterObj = McpHandlerUtils::CreateResultObject();
         EmitterObj->SetStringField(TEXT("name"), Handle.GetName().ToString());
         EmitterObj->SetBoolField(TEXT("enabled"), Handle.GetIsEnabled());
-        EmitterObj->SetObjectField(TEXT("moduleInputs"), CollectModuleInputs(Scripts, Handle.GetName().ToString()));
+        TSharedPtr<FJsonObject> EnumOptions;
+        EmitterObj->SetObjectField(TEXT("moduleInputs"), CollectModuleInputs(Scripts, Handle, EnumOptions));
+        if (EnumOptions.IsValid() && EnumOptions->Values.Num() > 0)
+        {
+            EmitterObj->SetObjectField(TEXT("enumOptions"), EnumOptions);
+        }
         EmitterObj->SetObjectField(TEXT("staticSwitches"), CollectModuleStaticSwitches(Handle));
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
         UNiagaraEmitter* Emitter = Handle.GetInstance().Emitter;

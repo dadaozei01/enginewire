@@ -191,11 +191,108 @@ static bool BindParameterToSource(FActionContext& Context)
     return true;
 }
 
+// Reset a module input back to its module default: clear any override link / dynamic input and remove
+// its rapid-iteration override from the emitter/system scripts.
+static bool ResetParameterValue(FActionContext& Context)
+{
+    const FString ParamName = GetJsonStringField(Context.Payload, TEXT("parameterName"));
+    if (Context.SystemPath.IsEmpty() || ParamName.IsEmpty())
+    {
+        Context.SendError(Context.SystemPath.IsEmpty() ? TEXT("Missing 'systemPath' (or 'assetPath'): the Niagara System.") : TEXT("Missing 'parameterName'."), TEXT("INVALID_ARGUMENT"));
+        return true;
+    }
+#if MCP_HAS_NIAGARA_INPUT_OVERRIDES
+    UNiagaraSystem* System = nullptr;
+    FNiagaraEmitterHandle* Handle = nullptr;
+    if (!LoadSystemAndEmitter(Context, System, Handle))
+    {
+        return true;
+    }
+    UNiagaraScriptSource* ScriptSource = GetEmitterScriptSource(Handle);
+    UNiagaraGraph* Graph = ScriptSource ? ScriptSource->NodeGraph : nullptr;
+    if (!Graph)
+    {
+        Context.SendError(TEXT("Emitter has no Niagara graph source."), TEXT("NIAGARA_GRAPH_MISSING"));
+        return true;
+    }
+    FString NotAnInput, NotAnInputCode;
+    UNiagaraNodeFunctionCall* Function = ResolveDynamicInputTargetNode(Context, Graph, FString(), ParamName, NotAnInput, NotAnInputCode);
+    FNiagaraVariable Input;
+    if (!(Function && FindModuleInput(Function, ParamName, Input)))
+    {
+        Function = FindDynamicInputCallInput(Graph, ParamName, Input);
+    }
+    if (!Function)
+    {
+        Context.SendError(NotAnInput.IsEmpty() ? FString::Printf(TEXT("Module input '%s' not found."), *ParamName) : NotAnInput,
+            NotAnInputCode.IsEmpty() ? TEXT("INPUT_NOT_FOUND") : NotAnInputCode);
+        return true;
+    }
+
+    Graph->Modify();
+    int32 ClearedLinks = 0;
+    const FString OverridePinKey = Function->GetFunctionName() + TEXT(".") + BareInputName(Input.GetName().ToString());
+    for (UEdGraphPin* MapIn : Function->Pins)
+    {
+        UEdGraphNode* Overrides = (MapIn && MapIn->Direction == EGPD_Input && MapIn->LinkedTo.Num() > 0)
+            ? MapIn->LinkedTo[0]->GetOwningNode() : nullptr;
+        if (!Overrides || Overrides->GetClass()->GetName() != TEXT("NiagaraNodeParameterMapSet")) continue;
+        for (UEdGraphPin* Pin : Overrides->Pins)
+        {
+            if (Pin && Pin->Direction == EGPD_Input && Pin->LinkedTo.Num() > 0 && Pin->PinName.ToString().Equals(OverridePinKey, ESearchCase::IgnoreCase))
+            {
+                Overrides->Modify();
+                ClearNiagaraInputOverrideLinks(*Pin);
+                ++ClearedLinks;
+            }
+        }
+    }
+
+    int32 RemovedOverrides = 0;
+    const FString RapidName = TEXT("Constants.") + Handle->GetName().ToString() + TEXT(".") + OverridePinKey;
+    const FNiagaraVariable RapidVar(Input.GetType(), FName(*RapidName));
+    TArray<UNiagaraScript*> TargetScripts;
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
+    if (MCP_NIAGARA_EMITTER_DATA_TYPE* EmData = MCP_GET_EMITTER_DATA(*Handle))
+    {
+        EmData->GetScripts(TargetScripts, false);
+    }
+#endif
+    TargetScripts.AddUnique(System->GetSystemSpawnScript());
+    TargetScripts.AddUnique(System->GetSystemUpdateScript());
+    for (UNiagaraScript* Script : TargetScripts)
+    {
+        if (Script && Script->RapidIterationParameters.IndexOf(RapidVar) != INDEX_NONE)
+        {
+            Script->Modify();
+            if (Script->RapidIterationParameters.RemoveParameter(RapidVar))
+            {
+                ++RemovedOverrides;
+            }
+        }
+    }
+
+    Function->MarkNodeRequiresSynchronization(TEXT("Module input reset over MCP"), true);
+    Graph->NotifyGraphChanged();
+    System->RequestCompile(false);
+    MarkDirtyAndVerify(Context, System);
+    Context.Result->SetStringField(TEXT("parameterName"), OverridePinKey);
+    Context.Result->SetNumberField(TEXT("clearedLinks"), ClearedLinks);
+    Context.Result->SetNumberField(TEXT("removedOverrides"), RemovedOverrides);
+    Context.Result->SetStringField(TEXT("message"), FString::Printf(TEXT("Reset '%s' to module default."), *OverridePinKey));
+    Context.SendSuccess(true, TEXT("Parameter reset to default."));
+#else
+    Context.SendError(TEXT("Resetting a Niagara input requires Unreal Engine 5.3 or later."), TEXT("NIAGARA_RESET_UNSUPPORTED"));
+#endif
+    return true;
+}
+
 bool HandleParameterAction(FActionContext& Context, const FString& SubAction)
 {
     if (SubAction == TEXT("add_user_parameter")) return AddUserParameter(Context);
     if (SubAction == TEXT("set_parameter_value")) return SetParameterValue(Context);
     if (SubAction == TEXT("bind_parameter_to_source")) return BindParameterToSource(Context);
+    if (SubAction == TEXT("reset_parameter_value")) return ResetParameterValue(Context);
     return false;
 }
 }

@@ -67,8 +67,15 @@ bool HandleScreenshotAction(
   }
 
   FString ScreenshotPath;
+#if PLATFORM_MAC
+  const FString DefaultScreenshotSubdir = TEXT("Screenshots/MacEditor");
+#elif PLATFORM_LINUX
+  const FString DefaultScreenshotSubdir = TEXT("Screenshots/LinuxEditor");
+#else
+  const FString DefaultScreenshotSubdir = TEXT("Screenshots/WindowsEditor");
+#endif
   if (!ResolveScreenshotDirectoryForMcp(
-          Payload, FPaths::ProjectSavedDir() / TEXT("Screenshots/WindowsEditor"),
+          Payload, FPaths::ProjectSavedDir() / DefaultScreenshotSubdir,
           ScreenshotPath, Message)) {
     ErrorCode = TEXT("SECURITY_VIOLATION");
     Resp->SetStringField(TEXT("error"), Message);

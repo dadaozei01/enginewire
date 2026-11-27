@@ -81,7 +81,10 @@ bool IsNiagaraAuthoringSubAction(const FString& SubAction)
         TEXT("set_niagara_simulation_stage"),
         TEXT("step_niagara_simulation"),
         TEXT("setup_niagara_neighbor_grid"),
-        TEXT("create_niagara_data_channel")};
+        TEXT("create_niagara_data_channel"),
+        TEXT("reset_parameter_value"),
+        TEXT("remove_niagara_module"),
+        TEXT("reorder_niagara_module")};
     return NiagaraAuthoringActions.Contains(SubAction);
 }
 

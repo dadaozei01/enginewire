@@ -1,0 +1,209 @@
+[
+  {
+    "id": "manage_effect.reset_parameter_value",
+    "aliases": [],
+    "discovery": {
+      "domain": "effect",
+      "family": "niagara authoring",
+      "topics": [
+        "reset niagara parameter",
+        "unbind niagara input",
+        "clear dynamic input",
+        "恢复默认值",
+        "解除绑定"
+      ],
+      "summary": "Reset a Niagara module input (Module.Input) back to its module default: clears any linked parameter or dynamic input override and removes its rapid-iteration override from the emitter/system scripts, then recompiles and saves.",
+      "whenToUse": [
+        "Remove a dynamic input or parameter binding and restore a module input's default value."
+      ],
+      "whenNotToUse": [
+        "Deleting a system user parameter: use remove_niagara_user_parameter."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": { "type": "string" },
+          "systemPath": { "type": "string", "description": "Niagara system asset path." },
+          "emitterName": { "type": "string", "description": "Target emitter name." },
+          "parameterName": { "type": "string", "description": "Module input name (e.g. InitializeParticle.Lifetime)." },
+          "save": { "type": "boolean", "description": "Save after compile (default true)." }
+        },
+        "required": ["action", "systemPath", "emitterName", "parameterName"],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "parameterName": { "type": "string" },
+          "clearedLinks": { "type": "number" },
+          "removedOverrides": { "type": "number" },
+          "saved": { "type": "boolean" }
+        },
+        "required": ["success"],
+        "additionalProperties": true
+      }
+    },
+    "examples": [
+      {
+        "title": "Reset a module input to default.",
+        "input": {
+          "action": "reset_parameter_value",
+          "systemPath": "/Game/FX/NS_Test",
+          "emitterName": "Fountain",
+          "parameterName": "InitializeParticle.Lifetime"
+        },
+        "output": { "success": true, "clearedLinks": 1, "removedOverrides": 0, "saved": true }
+      }
+    ],
+    "availability": { "requiredPlugins": ["Niagara"], "editorStates": ["edit"] },
+    "behavior": { "effect": "write", "idempotency": "idempotent", "longRunning": false, "safeToRetry": true },
+    "policy": { "requiredScope": "write", "consent": "none", "dataAccess": "project-write" },
+    "cost": { "latency": "instant", "resources": "low" },
+    "routing": { "parentTool": "manage_effect", "dispatchAction": "reset_parameter_value" }
+  },
+  {
+    "id": "manage_effect.remove_niagara_module",
+    "aliases": [],
+    "discovery": {
+      "domain": "effect",
+      "family": "niagara authoring",
+      "topics": [
+        "remove niagara module",
+        "delete stack module",
+        "删除模块"
+      ],
+      "summary": "Remove a module from an emitter's stack by moduleName (and optional stage), safely bypassing its parameter-map chain and cleaning up its override node, then recompiles and saves.",
+      "whenToUse": [
+        "Remove an unwanted module from an emitter's stack."
+      ],
+      "whenNotToUse": [
+        "Temporarily disabling a module: use set_emitter_properties moduleEnabled."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": { "type": "string" },
+          "systemPath": { "type": "string", "description": "Niagara system asset path." },
+          "emitterName": { "type": "string", "description": "Target emitter name." },
+          "moduleName": { "type": "string", "description": "Module name as listed by get_niagara_info." },
+          "stage": { "type": "string", "description": "Optional stage filter (e.g. ParticleUpdate, ParticleSpawn)." },
+          "save": { "type": "boolean", "description": "Save after compile (default true)." }
+        },
+        "required": ["action", "systemPath", "emitterName", "moduleName"],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "moduleName": { "type": "string" },
+          "stage": { "type": "string" },
+          "removed": { "type": "boolean" },
+          "saved": { "type": "boolean" }
+        },
+        "required": ["success"],
+        "additionalProperties": true
+      }
+    },
+    "examples": [
+      {
+        "title": "Remove GravityForce from ParticleUpdate.",
+        "input": {
+          "action": "remove_niagara_module",
+          "systemPath": "/Game/FX/NS_Test",
+          "emitterName": "Fountain",
+          "moduleName": "GravityForce",
+          "stage": "ParticleUpdate"
+        },
+        "output": { "success": true, "removed": true, "saved": true }
+      }
+    ],
+    "availability": { "requiredPlugins": ["Niagara"], "editorStates": ["edit"] },
+    "behavior": { "effect": "write", "idempotency": "non-idempotent", "longRunning": false, "safeToRetry": false },
+    "policy": { "requiredScope": "write", "consent": "none", "dataAccess": "project-write" },
+    "cost": { "latency": "instant", "resources": "low" },
+    "routing": { "parentTool": "manage_effect", "dispatchAction": "remove_niagara_module" }
+  },
+  {
+    "id": "manage_effect.reorder_niagara_module",
+    "aliases": [],
+    "discovery": {
+      "domain": "effect",
+      "family": "niagara authoring",
+      "topics": [
+        "reorder niagara module",
+        "move module in stack",
+        "调整模块顺序"
+      ],
+      "summary": "Move a stack module to a new 0-based targetIndex within its stage, relinking the parameter-map chain cleanly, then recompiles and saves.",
+      "whenToUse": [
+        "Change module execution order within a stage (e.g. moving a force or collision module before SolveForcesAndVelocity)."
+      ],
+      "whenNotToUse": [
+        "Moving a module across different stages."
+      ]
+    },
+    "schemas": {
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "action": { "type": "string" },
+          "systemPath": { "type": "string", "description": "Niagara system asset path." },
+          "emitterName": { "type": "string", "description": "Target emitter name." },
+          "moduleName": { "type": "string", "description": "Module name as listed by get_niagara_info." },
+          "stage": { "type": "string", "description": "Optional stage filter." },
+          "targetIndex": { "type": "integer", "minimum": 0, "description": "0-based destination index within the stage." },
+          "save": { "type": "boolean", "description": "Save after compile (default true)." }
+        },
+        "required": ["action", "systemPath", "emitterName", "moduleName", "targetIndex"],
+        "additionalProperties": false
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "moduleName": { "type": "string" },
+          "stage": { "type": "string" },
+          "previousIndex": { "type": "number" },
+          "targetIndex": { "type": "number" },
+          "moved": { "type": "boolean" },
+          "saved": { "type": "boolean" }
+        },
+        "required": ["success"],
+        "additionalProperties": true
+      }
+    },
+    "examples": [
+      {
+        "title": "Move Collision before SolveForcesAndVelocity.",
+        "input": {
+          "action": "reorder_niagara_module",
+          "systemPath": "/Game/FX/NS_Test",
+          "emitterName": "Fountain",
+          "moduleName": "Collision",
+          "targetIndex": 0
+        },
+        "output": { "success": true, "moved": true, "previousIndex": 2, "targetIndex": 0, "saved": true }
+      }
+    ],
+    "availability": { "requiredPlugins": ["Niagara"], "editorStates": ["edit"] },
+    "behavior": { "effect": "write", "idempotency": "idempotent", "longRunning": false, "safeToRetry": true },
+    "policy": { "requiredScope": "write", "consent": "none", "dataAccess": "project-write" },
+    "cost": { "latency": "instant", "resources": "low" },
+    "routing": { "parentTool": "manage_effect", "dispatchAction": "reorder_niagara_module" }
+  }
+]
