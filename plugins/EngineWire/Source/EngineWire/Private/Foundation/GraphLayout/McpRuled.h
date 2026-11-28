@@ -63,7 +63,7 @@ struct FParams
 {
     /** Localize distant reads of zero-side-effect sources (self-context members, Self, read-only locals/function inputs, and zero-arg native const pure getters) without duplicating calculations. */
     bool bLocalizeSharedGetters = true;
-    float MaxSharedGetSpan = 768.0f;
+    float MaxSharedGetSpan = 600.0f;
     /** Batch insertion may make room; arrange_nodes keeps unlisted nodes fixed. */
     bool bAllowMovingExisting = true;
     /** When true and bAllowMovingExisting is set, try a short horizontal slide past narrow untouched neighbors
@@ -73,11 +73,11 @@ struct FParams
     /** Clear space between two exec nodes of a row. */
     float ExecGap = 96.0f;
     /** Clear space between a data producer and its reader. */
-    float DataGap = 48.0f;
+    float DataGap = 64.0f;
     /** Least clear space between two stacked inputs of one reader. */
-    float InputGap = 16.0f;
+    float InputGap = 28.0f;
     /** Clear space between an exec row and the data laid out under it. */
-    float LaneGap = 32.0f;
+    float LaneGap = 40.0f;
     /** Clear space a block dropped below others keeps from them. */
     float RowGap = 96.0f;
     /** Least clear space between any two nodes. */
@@ -88,6 +88,10 @@ struct FParams
     float MaxRowWidth = 6000.0f;
     /** Route backward exec loops / leftward cross-event exec merges through outer corridor auto-knots. */
     bool bRouteBackwardExecs = true;
+    /** Defer pure nodes shared by multiple exec consumers to a centroid/left-bus pass instead of first-come claiming. */
+    bool bDeferSharedPureNodes = true;
+    /** Route long or node-crossing data wires through tidy orthogonal auto-knot bus tracks. */
+    bool bRouteLongDataEdges = false;
     /** Treat untouched existing comment boxes as locked obstacles and sync/refit comments whose members move. */
     bool bProtectExistingComments = true;
     /** Collapse EngineWire-owned auto-exec knots before re-solving for idempotent repeated layouts. */

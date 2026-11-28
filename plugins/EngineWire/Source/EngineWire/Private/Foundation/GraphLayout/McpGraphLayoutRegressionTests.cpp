@@ -335,6 +335,21 @@ bool FMcpGraphLayoutRegressionTest::RunTest(const FString& Parameters)
         }
     }
 
+    // 3. Data wire diagnostics & idempotent auto-data-knot collapse:
+    {
+        UBlueprint* BP = MakeTestBlueprint(TEXT("LayoutReg_DataWireDiag"));
+        UEdGraph* Graph = BP->UbergraphPages.Num() > 0 ? BP->UbergraphPages[0] : nullptr;
+        if (!TestNotNull(TEXT("DataWireDiag fixture has EventGraph"), Graph)) { return false; }
+
+        UK2Node_CallFunction* PureA = MakePureAddInt(Graph, 0, 0);
+        UK2Node_CallFunction* PureB = MakePureAddInt(Graph, 1400, 900);
+        PureA->FindPin(UEdGraphSchema_K2::PN_ReturnValue, EGPD_Output)->MakeLinkTo(PureB->FindPin(TEXT("A"), EGPD_Input));
+
+        const McpGraphLayoutDiag::FLayoutQualityReport Before = McpGraphLayoutDiag::AnalyzeGraphQuality(Graph);
+        TestTrue(TEXT("long data wire detected (> 600px)"), Before.LongDataEdgeCount >= 1);
+        TestTrue(TEXT("maxDataEdgeLength reflects > 600px wire"), Before.MaxDataEdgeLength > 600.0);
+    }
+
     return true;
 }
 #endif

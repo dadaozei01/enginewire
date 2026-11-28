@@ -160,6 +160,82 @@ public:
             }
         }
         ObstacleAt = P.Obstacles;
+        SharedPure.Init(false, Count);
+        TransitiveExecProducers.SetNum(Count);
+        if (bAnyExecNode)
+        {
+            TArray<int32> PureOrder;
+            TSet<int32> PureSeen;
+            TFunction<void(int32)> VisitPure = [&](int32 Node)
+            {
+                if (PureSeen.Contains(Node) || IsExecShape(P.Shapes[Node])) { return; }
+                PureSeen.Add(Node);
+                for (const int32 Link : In[Node])
+                {
+                    const FLink& Each = P.Links[Link];
+                    if (!Each.bExec && !Each.bDelegate)
+                    {
+                        if (IsExecShape(P.Shapes[Each.From]))
+                        {
+                            TransitiveExecProducers[Node].AddUnique(Each.From);
+                        }
+                        else
+                        {
+                            VisitPure(Each.From);
+                            for (const int32 ExecP : TransitiveExecProducers[Each.From])
+                            {
+                                TransitiveExecProducers[Node].AddUnique(ExecP);
+                            }
+                        }
+                    }
+                }
+            };
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                if (!IsExecShape(P.Shapes[Node])) { VisitPure(Node); }
+            }
+        }
+        if (K.bDeferSharedPureNodes && bAnyExecNode)
+        {
+            TArray<int32> PrimaryExecOwner;
+            PrimaryExecOwner.Init(INDEX_NONE, Count);
+            for (int32 ExecNode = 0; ExecNode < Count; ++ExecNode)
+            {
+                if (!IsExecShape(P.Shapes[ExecNode]))
+                {
+                    continue;
+                }
+                TSet<int32> VisitedFromExec;
+                TArray<int32> Stack = {ExecNode};
+                while (Stack.Num() > 0)
+                {
+                    const int32 Consumer = Stack.Pop(EAllowShrinking::No);
+                    for (const int32 Link : In[Consumer])
+                    {
+                        const FLink& Each = P.Links[Link];
+                        if (Each.bExec || Each.bDelegate || IsExecShape(P.Shapes[Each.From]))
+                        {
+                            continue;
+                        }
+                        if (VisitedFromExec.Contains(Each.From))
+                        {
+                            continue;
+                        }
+                        VisitedFromExec.Add(Each.From);
+                        if (PrimaryExecOwner[Each.From] == INDEX_NONE)
+                        {
+                            PrimaryExecOwner[Each.From] = ExecNode;
+                            Stack.Add(Each.From);
+                        }
+                        else if (PrimaryExecOwner[Each.From] != ExecNode)
+                        {
+                            // Shared by multiple distinct exec consumers: defer to centroid/left-bus pass.
+                            SharedPure[Each.From] = true;
+                        }
+                    }
+                }
+            }
+        }
         RebuildPlaced();
     }
 
@@ -206,6 +282,11 @@ public:
                 Queue.Add({Node, INDEX_NONE, false});
                 Drain();
             }
+        }
+        // Place pure nodes shared across multiple exec consumers at their consumers' left-bus / median Y.
+        if (K.bDeferSharedPureNodes)
+        {
+            PlaceSharedPureNodes();
         }
         // Data read by a node that stays (or is placed): laid out as that node's input group, beside it.
         for (int32 Node = 0; Node < Count; ++Node)
@@ -308,6 +389,10 @@ public:
         {
             RouteBackwardExecEdges();
         }
+        if (K.bRouteLongDataEdges)
+        {
+            RouteLongDataEdges();
+        }
         return FSolution{Pos, Breaks};
     }
 
@@ -330,6 +415,8 @@ private:
     TArray<TArray<int32>> Out;
     TArray<FVector2D> Pos;
     TArray<bool> Done;
+    TArray<bool> SharedPure;
+    TArray<TArray<int32>> TransitiveExecProducers;
     TArray<int32> Region;
     TArray<FBox2D> PlacedBox;
     TArray<int32> PlacedRegion;
@@ -389,7 +476,7 @@ private:
             for (const int32 Link : In[Consumer])
             {
                 const FLink& Each = P.Links[Link];
-                if (Each.bExec || Done[Each.From] || IsExecShape(P.Shapes[Each.From]) ||
+                if (Each.bExec || Done[Each.From] || SharedPure[Each.From] || IsExecShape(P.Shapes[Each.From]) ||
                     !P.Shapes[Each.From].DataOut.IsValidIndex(Each.FromPin) || !Reader.DataIn.IsValidIndex(Each.ToPin))
                 {
                     continue;
@@ -471,7 +558,7 @@ private:
         for (const int32 Link : In[Consumer])
         {
             const FLink& Each = P.Links[Link];
-            if (Each.bExec || Done[Each.From] || IsExecShape(P.Shapes[Each.From]) ||
+            if (Each.bExec || Done[Each.From] || SharedPure[Each.From] || IsExecShape(P.Shapes[Each.From]) ||
                 !P.Shapes[Each.From].DataOut.IsValidIndex(Each.FromPin) || !Reader.DataIn.IsValidIndex(Each.ToPin))
             {
                 continue;
@@ -1342,17 +1429,16 @@ private:
                     }
                 }
             }
-            // Data computed from an exec node's output (loop Index, spawned Actor, ...) must follow that
-            // producer. Deep trees otherwise fit beneath the preceding column and send the fresh value leftwards.
+            // Data computed from an exec node's output (loop Index, spawned Actor, ...), directly or transitively,
+            // must follow that producer so it never lands to the left of the loop/exec node.
             for (int32 DataIndex = 0; DataIndex < Data.Nodes.Num(); ++DataIndex)
             {
-                for (const int32 Link : In[Data.Nodes[DataIndex]])
+                for (const int32 ExecProd : TransitiveExecProducers[Data.Nodes[DataIndex]])
                 {
-                    const FLink& Incoming = P.Links[Link];
-                    const int32 Producer = Part.Nodes.Find(Incoming.From);
-                    if (!Incoming.bExec && Producer != INDEX_NONE && IsExecShape(P.Shapes[Incoming.From]))
+                    const int32 Producer = Part.Nodes.Find(ExecProd);
+                    if (Producer != INDEX_NONE)
                     {
-                        X = FMath::Max(X, static_cast<float>(Part.At[Producer].X + P.Shapes[Incoming.From].Width +
+                        X = FMath::Max(X, static_cast<float>(Part.At[Producer].X + P.Shapes[ExecProd].Width +
                             K.DataGap - Data.At[DataIndex].X));
                     }
                 }
@@ -1631,6 +1717,141 @@ private:
         Breaks.Add(Each);
     }
 
+    // Places shared pure nodes (consumed by multiple distinct exec nodes) in consumers-before-producers order
+    // at their consumers' left-bus X and median Y, pulling any private pure inputs along with them.
+    void PlaceSharedPureNodes()
+    {
+        TArray<int32> Pending;
+        TSet<int32> PendingSet;
+        for (int32 Node = 0; Node < Count; ++Node)
+        {
+            if (SharedPure[Node] && !Done[Node] && IsFree(Node))
+            {
+                Pending.Add(Node);
+                PendingSet.Add(Node);
+            }
+        }
+        if (Pending.Num() == 0)
+        {
+            return;
+        }
+        TMap<int32, int32> OutPendingDeg;
+        for (const int32 Node : Pending)
+        {
+            int32 Deg = 0;
+            for (const int32 Link : Out[Node])
+            {
+                const FLink& Each = P.Links[Link];
+                if (!Each.bExec && !Each.bDelegate && PendingSet.Contains(Each.To))
+                {
+                    ++Deg;
+                }
+            }
+            OutPendingDeg.Add(Node, Deg);
+        }
+        TArray<int32> Order;
+        Order.Reserve(Pending.Num());
+        TArray<int32> Ready;
+        for (const int32 Node : Pending)
+        {
+            if (OutPendingDeg[Node] == 0)
+            {
+                Ready.Add(Node);
+            }
+        }
+        while (Ready.Num() > 0)
+        {
+            const int32 Node = Ready.Pop(EAllowShrinking::No);
+            Order.Add(Node);
+            for (const int32 Link : In[Node])
+            {
+                const FLink& Each = P.Links[Link];
+                if (!Each.bExec && !Each.bDelegate && PendingSet.Contains(Each.From))
+                {
+                    int32& Deg = OutPendingDeg[Each.From];
+                    if (--Deg == 0)
+                    {
+                        Ready.Add(Each.From);
+                    }
+                }
+            }
+        }
+        for (const int32 Node : Pending)
+        {
+            if (!Order.Contains(Node))
+            {
+                Order.Add(Node);
+            }
+        }
+
+        for (const int32 Node : Order)
+        {
+            if (Done[Node])
+            {
+                continue;
+            }
+            double MinConsumerX = TNumericLimits<double>::Max();
+            TArray<double> TargetYs;
+            for (const int32 Link : Out[Node])
+            {
+                const FLink& Each = P.Links[Link];
+                if (Each.bExec || Each.bDelegate || Each.To == Node || !IsPlaced(Each.To))
+                {
+                    continue;
+                }
+                const FShape& Reader = P.Shapes[Each.To];
+                if (!Reader.DataIn.IsValidIndex(Each.ToPin) || !P.Shapes[Node].DataOut.IsValidIndex(Each.FromPin))
+                {
+                    continue;
+                }
+                MinConsumerX = FMath::Min(MinConsumerX, Pos[Each.To].X);
+                TargetYs.Add(Pos[Each.To].Y + Reader.DataIn[Each.ToPin] - P.Shapes[Node].DataOut[Each.FromPin]);
+            }
+            if (TargetYs.Num() == 0)
+            {
+                continue;
+            }
+            TargetYs.Sort();
+            const double MedianY = TargetYs[TargetYs.Num() / 2];
+            double WantX = MinConsumerX - K.DataGap - Width(Node);
+            for (const int32 ExecProd : TransitiveExecProducers[Node])
+            {
+                if (IsPlaced(ExecProd))
+                {
+                    WantX = FMath::Max(WantX, Pos[ExecProd].X + P.Shapes[ExecProd].Width + K.DataGap);
+                }
+            }
+
+            FPart Part;
+            Done[Node] = true;
+            Part.Add(Node, FVector2D::ZeroVector);
+            Feeds(Node, FVector2D::ZeroVector, Part);
+            double WantY = MedianY;
+            for (int32 Pass = 0; Pass < 8 && Breaks.Num() > 0; ++Pass)
+            {
+                bool bHitBreak = false;
+                for (int32 PartIdx = 0; PartIdx < Part.Nodes.Num(); ++PartIdx)
+                {
+                    const FBox2D PartBox = BoxAt(Part.Nodes[PartIdx], FVector2D(WantX, WantY) + Part.At[PartIdx]);
+                    for (const FRowBreak& Br : Breaks)
+                    {
+                        for (const FVector2D& Pt : {Br.A, Br.B})
+                        {
+                            const FBox2D KnotBox(Pt - FVector2D(20.0, 16.0), Pt + FVector2D(20.0, 16.0));
+                            if (Cross(PartBox, KnotBox))
+                            {
+                                WantY = FMath::Max(WantY, KnotBox.Max.Y + 8.0 - Part.At[PartIdx].Y);
+                                bHitBreak = true;
+                            }
+                        }
+                    }
+                }
+                if (!bHitBreak) { break; }
+            }
+            PlaceBlock(Part, FVector2D(WantX, WantY), false, NoLine);
+        }
+    }
+
     // A pure node no free node reads: its tree beside the placed node that reads it, else at the origin.
     void PlaceValue(int32 Node)
     {
@@ -1896,6 +2117,253 @@ private:
                 }
             }
             (void)bFoundClear;
+        }
+    }
+
+    // Routes long (> 600px) or node-crossing data wires through tidy orthogonal auto-knot tracks.
+    // Multi-consumer data pins (e.g. ForLoop.Index or shared pure nodes) share a vertical trunk knot at BusX.
+    void RouteLongDataEdges()
+    {
+        TSet<int32> AlreadyRouted;
+        TArray<FBox2D> KnotBoxes;
+        for (const FRowBreak& Existing : Breaks)
+        {
+            AlreadyRouted.Add(Existing.Link);
+            for (const FVector2D& Pt : {Existing.A, Existing.B})
+            {
+                const FVector2D At(FMath::RoundToInt(Pt.X - 16.0), FMath::RoundToInt(Pt.Y - 12.0));
+                KnotBoxes.Emplace(At, At + FVector2D(32.0, 24.0));
+            }
+        }
+        auto IsKnotPointFree = [&](const FVector2D& Centre, bool bAllowSharedTrunk = false, const FVector2D* SharedTrunk = nullptr) -> bool
+        {
+            const FVector2D At(FMath::RoundToInt(Centre.X - 16.0), FMath::RoundToInt(Centre.Y - 12.0));
+            const FBox2D Candidate(At - FVector2D(4.0, 4.0), At + FVector2D(36.0, 28.0));
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                if (IsPlaced(Node) && Cross(Candidate, BoxAt(Node, Pos[Node])))
+                {
+                    return false;
+                }
+            }
+            for (const FBox2D& Obstacle : ObstacleAt)
+            {
+                if (Obstacle.bIsValid && Cross(Candidate, Obstacle))
+                {
+                    return false;
+                }
+            }
+            for (const FBox2D& ExistingKnot : KnotBoxes)
+            {
+                if (bAllowSharedTrunk && SharedTrunk)
+                {
+                    const FVector2D SharedAt(FMath::RoundToInt(SharedTrunk->X - 16.0), FMath::RoundToInt(SharedTrunk->Y - 12.0));
+                    if (FMath::IsNearlyEqual(ExistingKnot.Min.X, SharedAt.X, 1.0) &&
+                        FMath::IsNearlyEqual(ExistingKnot.Min.Y, SharedAt.Y, 1.0))
+                    {
+                        continue;
+                    }
+                }
+                if (Cross(Candidate, ExistingKnot))
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+        auto SegmentCrossesPlacedNode = [&](const FVector2D& P0, const FVector2D& P1, int32 IgnoreA, int32 IgnoreB) -> bool
+        {
+            const FVector2D D = P1 - P0;
+            for (int32 Node = 0; Node < Count; ++Node)
+            {
+                if (Node == IgnoreA || Node == IgnoreB || !IsPlaced(Node))
+                {
+                    continue;
+                }
+                const FBox2D Raw = BoxAt(Node, Pos[Node]);
+                if (Raw.GetSize().X <= 16.0 || Raw.GetSize().Y <= 16.0)
+                {
+                    continue;
+                }
+                const FBox2D Box(Raw.Min + FVector2D(6.0, 6.0), Raw.Max - FVector2D(6.0, 6.0));
+                double TMin = 0.0, TMax = 1.0;
+                const auto Clip = [&](double Orig, double Delta, double MinB, double MaxB) -> bool
+                {
+                    if (FMath::Abs(Delta) < 1e-6) { return Orig >= MinB && Orig <= MaxB; }
+                    double T0 = (MinB - Orig) / Delta, T1 = (MaxB - Orig) / Delta;
+                    if (T0 > T1) { Swap(T0, T1); }
+                    TMin = FMath::Max(TMin, T0);
+                    TMax = FMath::Min(TMax, T1);
+                    return TMin <= TMax;
+                };
+                if (Clip(P0.X, D.X, Box.Min.X, Box.Max.X) && Clip(P0.Y, D.Y, Box.Min.Y, Box.Max.Y))
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Group candidate data links by (From, FromPin) so fanout pins can share a vertical trunk knot.
+        struct FDataEdgeCandidate
+        {
+            int32 Link = INDEX_NONE;
+            FVector2D FromPt = FVector2D::ZeroVector;
+            FVector2D ToPt = FVector2D::ZeroVector;
+            double Length = 0.0;
+        };
+        TMap<uint64, TArray<FDataEdgeCandidate>> BySourcePin;
+        for (int32 Link = 0; Link < P.Links.Num(); ++Link)
+        {
+            const FLink& Each = P.Links[Link];
+            if (Each.bExec || Each.bDelegate || AlreadyRouted.Contains(Link) ||
+                !IsPlaced(Each.From) || !IsPlaced(Each.To) || (!IsFree(Each.From) && !IsFree(Each.To)))
+            {
+                continue;
+            }
+            const FShape& FromShape = P.Shapes[Each.From];
+            const FShape& ToShape = P.Shapes[Each.To];
+            if (!FromShape.DataOut.IsValidIndex(Each.FromPin) || !ToShape.DataIn.IsValidIndex(Each.ToPin))
+            {
+                continue;
+            }
+            const FVector2D FromPt(Pos[Each.From].X + FromShape.Width, Pos[Each.From].Y + FromShape.DataOut[Each.FromPin]);
+            const FVector2D ToPt(Pos[Each.To].X, Pos[Each.To].Y + ToShape.DataIn[Each.ToPin]);
+            const double Length = (ToPt - FromPt).Size();
+            if (Length <= 600.0)
+            {
+                continue;
+            }
+            const uint64 Key = (static_cast<uint64>(static_cast<uint32>(Each.From)) << 32) | static_cast<uint32>(Each.FromPin);
+            BySourcePin.FindOrAdd(Key).Add({Link, FromPt, ToPt, Length});
+        }
+
+        TArray<uint64> Keys;
+        BySourcePin.GetKeys(Keys);
+        Keys.Sort();
+        int32 BusLaneIndex = 0;
+        for (const uint64 Key : Keys)
+        {
+            TArray<FDataEdgeCandidate>& Edges = BySourcePin[Key];
+            Edges.Sort([](const FDataEdgeCandidate& A, const FDataEdgeCandidate& B)
+            {
+                return A.ToPt.Y < B.ToPt.Y;
+            });
+
+            // Pick a shared trunk X near the source output for forward multi-consumer fanout.
+            const FVector2D SharedFrom = Edges[0].FromPt;
+            const double BaseTrunkX = SharedFrom.X + FMath::Max(32.0f, K.DataGap * 0.75f);
+            bool bHasSharedTrunk = false;
+            FVector2D SharedTrunkPt = FVector2D::ZeroVector;
+            if (Edges.Num() >= 2)
+            {
+                for (int32 Try = 0; Try < 8; ++Try)
+                {
+                    const FVector2D CandA(BaseTrunkX + Try * 32.0, SharedFrom.Y);
+                    if (IsKnotPointFree(CandA))
+                    {
+                        SharedTrunkPt = CandA;
+                        bHasSharedTrunk = true;
+                        break;
+                    }
+                }
+            }
+
+            bool bSharedTrunkCommitted = false;
+            for (const FDataEdgeCandidate& Cand : Edges)
+            {
+                const FLink& Each = P.Links[Cand.Link];
+                const bool bForward = Cand.ToPt.X >= Cand.FromPt.X + 40.0;
+                bool bPlaced = false;
+                if (bForward)
+                {
+                    auto PointsClearOfEachOther = [](const FVector2D& A, const FVector2D& B) -> bool
+                    {
+                        return FMath::Abs(A.X - B.X) >= 36.0 || FMath::Abs(A.Y - B.Y) >= 28.0;
+                    };
+                    if (bHasSharedTrunk && Cand.ToPt.X >= SharedTrunkPt.X + 48.0 &&
+                        (bSharedTrunkCommitted || IsKnotPointFree(SharedTrunkPt)))
+                    {
+                        for (int32 Offset = 0; Offset <= 2 && !bPlaced; ++Offset)
+                        {
+                            const FVector2D CandB(SharedTrunkPt.X, Cand.ToPt.Y + Offset * 28.0);
+                            if (PointsClearOfEachOther(SharedTrunkPt, CandB) && IsKnotPointFree(CandB) &&
+                                !SegmentCrossesPlacedNode(SharedTrunkPt, CandB, Each.From, Each.To) &&
+                                !SegmentCrossesPlacedNode(CandB, Cand.ToPt, Each.From, Each.To))
+                            {
+                                Breaks.Add({Cand.Link, SharedTrunkPt, CandB});
+                                if (!bSharedTrunkCommitted)
+                                {
+                                    const FVector2D BoxA(FMath::RoundToInt(SharedTrunkPt.X - 16.0), FMath::RoundToInt(SharedTrunkPt.Y - 12.0));
+                                    KnotBoxes.Emplace(BoxA, BoxA + FVector2D(32.0, 24.0));
+                                    bSharedTrunkCommitted = true;
+                                }
+                                const FVector2D BoxB(FMath::RoundToInt(CandB.X - 16.0), FMath::RoundToInt(CandB.Y - 12.0));
+                                KnotBoxes.Emplace(BoxB, BoxB + FVector2D(32.0, 24.0));
+                                bPlaced = true;
+                            }
+                        }
+                    }
+                    if (!bPlaced)
+                    {
+                        // Single-consumer or blocked trunk: drop vertically before the consumer (or mid-gap when tight).
+                        const double PreferX = Cand.ToPt.X - FMath::Max(32.0f, K.DataGap * 0.75f);
+                        TArray<double, TInlineAllocator<8>> TryBusXs;
+                        for (int32 Try = 0; Try < 6; ++Try)
+                        {
+                            const double BusX = PreferX - Try * 32.0;
+                            if (BusX <= Cand.FromPt.X + 20.0) { break; }
+                            TryBusXs.Add(BusX);
+                        }
+                        if (Cand.ToPt.X - Cand.FromPt.X >= 40.0)
+                        {
+                            TryBusXs.Add((Cand.FromPt.X + Cand.ToPt.X) * 0.5);
+                        }
+                        for (const double BusX : TryBusXs)
+                        {
+                            const FVector2D CandA(BusX, Cand.FromPt.Y);
+                            const FVector2D CandB(BusX, Cand.ToPt.Y);
+                            if (PointsClearOfEachOther(CandA, CandB) && IsKnotPointFree(CandA) && IsKnotPointFree(CandB) &&
+                                !SegmentCrossesPlacedNode(CandA, CandB, Each.From, Each.To) &&
+                                !SegmentCrossesPlacedNode(CandB, Cand.ToPt, Each.From, Each.To))
+                            {
+                                Breaks.Add({Cand.Link, CandA, CandB});
+                                const FVector2D BoxA(FMath::RoundToInt(CandA.X - 16.0), FMath::RoundToInt(CandA.Y - 12.0));
+                                const FVector2D BoxB(FMath::RoundToInt(CandB.X - 16.0), FMath::RoundToInt(CandB.Y - 12.0));
+                                KnotBoxes.Emplace(BoxA, BoxA + FVector2D(32.0, 24.0));
+                                KnotBoxes.Emplace(BoxB, BoxB + FVector2D(32.0, 24.0));
+                                bPlaced = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                else if (Cand.FromPt.X - Cand.ToPt.X > 64.0 || SegmentCrossesPlacedNode(Cand.FromPt, Cand.ToPt, Each.From, Each.To))
+                {
+                    // Backward data wire: route through a clear horizontal corridor above or below intervening nodes.
+                    const double ExitX = Cand.FromPt.X + 36.0 + (BusLaneIndex % 4) * 28.0;
+                    const double EnterX = Cand.ToPt.X - 36.0;
+                    for (int32 TryY = 0; TryY < 16 && !bPlaced; ++TryY)
+                    {
+                        const double DeltaY = (TryY == 0) ? 0.0 : ((TryY % 2 == 1 ? 1 : -1) * ((TryY + 1) / 2) * 48.0);
+                        const FVector2D CandA(ExitX, Cand.ToPt.Y + DeltaY);
+                        const FVector2D CandB(EnterX, Cand.ToPt.Y + DeltaY);
+                        if ((FMath::Abs(CandA.X - CandB.X) >= 36.0 || FMath::Abs(CandA.Y - CandB.Y) >= 28.0) &&
+                            IsKnotPointFree(CandA) && IsKnotPointFree(CandB) &&
+                            !SegmentCrossesPlacedNode(CandA, CandB, Each.From, Each.To))
+                        {
+                            Breaks.Add({Cand.Link, CandA, CandB});
+                            const FVector2D BoxA(FMath::RoundToInt(CandA.X - 16.0), FMath::RoundToInt(CandA.Y - 12.0));
+                            const FVector2D BoxB(FMath::RoundToInt(CandB.X - 16.0), FMath::RoundToInt(CandB.Y - 12.0));
+                            KnotBoxes.Emplace(BoxA, BoxA + FVector2D(32.0, 24.0));
+                            KnotBoxes.Emplace(BoxB, BoxB + FVector2D(32.0, 24.0));
+                            bPlaced = true;
+                        }
+                    }
+                }
+                (void)Each;
+            }
+            ++BusLaneIndex;
         }
     }
 };

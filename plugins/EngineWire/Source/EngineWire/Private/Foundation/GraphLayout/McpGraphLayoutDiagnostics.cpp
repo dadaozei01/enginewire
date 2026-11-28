@@ -290,12 +290,15 @@ TSharedRef<FJsonObject> FLayoutQualityReport::ToJson() const
     TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
     Obj->SetNumberField(TEXT("nodeOverlapCount"), NodeOverlapCount);
     Obj->SetNumberField(TEXT("wireNodeCrossingCount"), WireNodeCrossingCount);
+    Obj->SetNumberField(TEXT("dataWireNodeCrossingCount"), DataWireNodeCrossingCount);
     Obj->SetNumberField(TEXT("commentIntrusionCount"), CommentIntrusionCount);
     Obj->SetNumberField(TEXT("backwardExecEdgeCount"), BackwardExecEdgeCount);
     Obj->SetNumberField(TEXT("longCrossRegionExecCount"), LongCrossRegionExecCount);
     Obj->SetNumberField(TEXT("longDelegateEdgeCount"), LongDelegateEdgeCount);
+    Obj->SetNumberField(TEXT("longDataEdgeCount"), LongDataEdgeCount);
     Obj->SetNumberField(TEXT("danglingAutoKnotCount"), DanglingAutoKnotCount);
     Obj->SetNumberField(TEXT("boundaryEdgeCount"), BoundaryEdgeCount);
+    Obj->SetNumberField(TEXT("maxDataEdgeLength"), FMath::RoundToInt(MaxDataEdgeLength));
     Obj->SetNumberField(TEXT("maxDisplacement"), FMath::RoundToInt(MaxDisplacement));
 
     TArray<TSharedPtr<FJsonValue>> IssueArr;
@@ -351,7 +354,10 @@ void MarkAutoLayoutKnot(UK2Node_Knot* Knot)
     Knot->bCommentBubblePinned = false;
 }
 
-int32 CollapseAutoExecKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNodes, TArray<FGuid>* OutRemovedGuids)
+namespace
+{
+int32 CollapseAutoKnotsInternal(UEdGraph* Graph, bool bExecOnly, const TSet<UEdGraphNode*>* ScopeNodes,
+                                TArray<FGuid>* OutRemovedGuids)
 {
     if (!Graph)
     {
@@ -367,9 +373,13 @@ int32 CollapseAutoExecKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNod
         }
         UEdGraphPin* InPin = Knot->GetInputPin();
         UEdGraphPin* OutPin = Knot->GetOutputPin();
-        if (!InPin || !OutPin ||
-            InPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec ||
-            OutPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+        if (!InPin || !OutPin)
+        {
+            continue;
+        }
+        const bool bIsExec = InPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec &&
+                             OutPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec;
+        if (bExecOnly != bIsExec)
         {
             continue;
         }
@@ -448,6 +458,17 @@ int32 CollapseAutoExecKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNod
         ++Removed;
     }
     return Removed;
+}
+} // namespace
+
+int32 CollapseAutoExecKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNodes, TArray<FGuid>* OutRemovedGuids)
+{
+    return CollapseAutoKnotsInternal(Graph, /*bExecOnly=*/true, ScopeNodes, OutRemovedGuids);
+}
+
+int32 CollapseAutoDataKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNodes, TArray<FGuid>* OutRemovedGuids)
+{
+    return CollapseAutoKnotsInternal(Graph, /*bExecOnly=*/false, ScopeNodes, OutRemovedGuids);
 }
 
 TArray<FString> BuildSemanticTopologyFingerprint(const UEdGraph* Graph)
@@ -1030,11 +1051,6 @@ FLayoutQualityReport AnalyzeGraphQuality(const UEdGraph* Graph,
                     Report.BoundaryEdges.Add(MakeIssue(TEXT("boundary_edge"), 0));
                 }
 
-                if (!bExec && !bDelegate)
-                {
-                    continue;
-                }
-
                 int32 CrossedNodes = 0;
                 if (Length > 96.0)
                 {
@@ -1058,29 +1074,55 @@ FLayoutQualityReport AnalyzeGraphQuality(const UEdGraph* Graph,
                     }
                 }
 
-                if (CrossedNodes > 0)
+                if (bExec || bDelegate)
                 {
-                    ++Report.WireNodeCrossingCount;
-                    Report.Issues.Add(MakeIssue(TEXT("wire_crosses_node"), CrossedNodes));
+                    if (CrossedNodes > 0)
+                    {
+                        ++Report.WireNodeCrossingCount;
+                        Report.Issues.Add(MakeIssue(TEXT("wire_crosses_node"), CrossedNodes));
+                    }
+                    if (bExec && Delta.X < -64.0)
+                    {
+                        ++Report.BackwardExecEdgeCount;
+                        Report.Issues.Add(MakeIssue(TEXT("backward_exec"), CrossedNodes));
+                    }
+                    if (bExec && (FMath::Abs(Delta.X) > 960.0 || FMath::Abs(Delta.Y) > 640.0))
+                    {
+                        ++Report.LongCrossRegionExecCount;
+                        Report.Issues.Add(MakeIssue(TEXT("long_exec_span"), CrossedNodes));
+                    }
+                    if (bDelegate && Length > 1200.0)
+                    {
+                        ++Report.LongDelegateEdgeCount;
+                        Report.Issues.Add(MakeIssue(TEXT("long_delegate_span"), CrossedNodes));
+                    }
                 }
-                if (bExec && Delta.X < -64.0)
+                else
                 {
-                    ++Report.BackwardExecEdgeCount;
-                    Report.Issues.Add(MakeIssue(TEXT("backward_exec"), CrossedNodes));
-                }
-                if (bExec && (FMath::Abs(Delta.X) > 960.0 || FMath::Abs(Delta.Y) > 640.0))
-                {
-                    ++Report.LongCrossRegionExecCount;
-                    Report.Issues.Add(MakeIssue(TEXT("long_exec_span"), CrossedNodes));
-                }
-                if (bDelegate && Length > 1200.0)
-                {
-                    ++Report.LongDelegateEdgeCount;
-                    Report.Issues.Add(MakeIssue(TEXT("long_delegate_span"), CrossedNodes));
+                    Report.MaxDataEdgeLength = FMath::Max(Report.MaxDataEdgeLength, Length);
+                    if (CrossedNodes > 0)
+                    {
+                        ++Report.DataWireNodeCrossingCount;
+                        Report.Issues.Add(MakeIssue(TEXT("data_wire_crosses_node"), CrossedNodes));
+                    }
+                    if (Length > 600.0)
+                    {
+                        ++Report.LongDataEdgeCount;
+                        Report.Issues.Add(MakeIssue(TEXT("long_data_span"), CrossedNodes));
+                    }
                 }
             }
         }
     }
+
+    Report.Issues.StableSort([](const FEdgeIssue& A, const FEdgeIssue& B)
+    {
+        if (A.CrossedNodeCount != B.CrossedNodeCount)
+        {
+            return A.CrossedNodeCount > B.CrossedNodeCount;
+        }
+        return A.Length > B.Length;
+    });
 
     // 4. Unused pure node groups.
     const TArray<TArray<UEdGraphNode*>> Unused = FindUnusedPureGroups(Graph);

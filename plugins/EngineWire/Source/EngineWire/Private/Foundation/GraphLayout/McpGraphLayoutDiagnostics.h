@@ -41,12 +41,15 @@ struct FLayoutQualityReport
 {
     int32 NodeOverlapCount = 0;
     int32 WireNodeCrossingCount = 0;
+    int32 DataWireNodeCrossingCount = 0;
     int32 CommentIntrusionCount = 0;
     int32 BackwardExecEdgeCount = 0;
     int32 LongCrossRegionExecCount = 0;
     int32 LongDelegateEdgeCount = 0;
+    int32 LongDataEdgeCount = 0;
     int32 DanglingAutoKnotCount = 0;
     int32 BoundaryEdgeCount = 0;
+    double MaxDataEdgeLength = 0.0;
     double MaxDisplacement = 0.0;
     TArray<FEdgeIssue> Issues;
     TArray<FEdgeIssue> BoundaryEdges;
@@ -60,6 +63,10 @@ void MarkAutoLayoutKnot(UK2Node_Knot* Knot);
 
 /** Collapses EngineWire-owned PC_Exec auto-knots (never manual knots, never data/wildcard knots). */
 int32 CollapseAutoExecKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNodes = nullptr,
+                            TArray<FGuid>* OutRemovedGuids = nullptr);
+
+/** Collapses EngineWire-owned non-exec (data) auto-knots (never manual knots). */
+int32 CollapseAutoDataKnots(UEdGraph* Graph, const TSet<UEdGraphNode*>* ScopeNodes = nullptr,
                             TArray<FGuid>* OutRemovedGuids = nullptr);
 
 /** Sorted multiset of folded non-knot pin connections for exact topology invariance checks. */

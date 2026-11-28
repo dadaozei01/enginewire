@@ -550,6 +550,53 @@ bool FMcpRuledTest::RunTest(const FString& Parameters)
             Out.Pos[3].Y >= Out.Pos[1].Y + InsertBranch.Shapes[1].Height + Params.RowGap - 1.0);
         TestTrue(TEXT("AfterB sits right of shifted B"), Out.Pos[4].X >= Out.Pos[1].X + 200.0 + Params.ExecGap - 1.0);
     }
+    // Shared pure node across multiple exec rows: placed at median Y of its consumers (not pinned to top row)
+    // and left of its leftmost consumer.
+    {
+        FProblem SharedPureProb;
+        // 0: Event
+        // 1: Branch (1 input, 2 exec outs: True -> 2, False -> 3)
+        // 2: TrueCall (1 input)
+        // 3: FalseBranch (2 exec outs: True -> 4, False -> 5)
+        // 4: LowerCallA (1 input)
+        // 5: LowerCallB (1 input)
+        // 6: SharedPure (0 inputs, 1 output) feeding 2 (top row), 4 (lower), and 5 (lower)
+        FShape TallTopCall = Exec(200.0f, 44.0f, 1, 1);
+        TallTopCall.Height = 700.0f;
+        SharedPureProb.Shapes = {
+            Event(200.0f),
+            Exec(180.0f, 44.0f, 0, 2),
+            TallTopCall,
+            Exec(180.0f, 44.0f, 0, 2),
+            Exec(200.0f, 44.0f, 1, 1),
+            Exec(200.0f, 44.0f, 1, 1),
+            Pure(0)
+        };
+        SharedPureProb.Links = {
+            {0, 0, 1, 0, true},
+            {1, 0, 2, 0, true},
+            {1, 1, 3, 0, true},
+            {3, 0, 4, 0, true},
+            {3, 1, 5, 0, true},
+            {6, 0, 2, 0, false},
+            {6, 0, 4, 0, false},
+            {6, 0, 5, 0, false}
+        };
+        SharedPureProb.Free = {true, true, true, true, true, true, true};
+        SharedPureProb.Pos.Init(FVector2D::ZeroVector, 7);
+        const FSolution Out = McpRuled::Solve(SharedPureProb, Params);
+        const double MinConsumerX = FMath::Min3(Out.Pos[2].X, Out.Pos[4].X, Out.Pos[5].X);
+        TestTrue(TEXT("shared pure node sits left of its leftmost consumer"),
+            Out.Pos[6].X + SharedPureProb.Shapes[6].Width + Params.DataGap <= MinConsumerX + 1.0);
+        TestTrue(TEXT("shared pure node is placed near lower median consumers instead of pinned to top row"),
+            Out.Pos[6].Y > Out.Pos[2].Y + 50.0);
+        TestEqual(TEXT("default layout avoids unsolicited data reroutes"), Out.Breaks.Num(), 0);
+        McpRuled::FParams RouteDataParams = Params;
+        RouteDataParams.bRouteLongDataEdges = true;
+        const FSolution RoutedOut = McpRuled::Solve(SharedPureProb, RouteDataParams);
+        TestTrue(TEXT("opt-in long fanout data wire gets tidy reroute breaks"),
+            RoutedOut.Breaks.Num() >= 1);
+    }
     return true;
 }
 #endif

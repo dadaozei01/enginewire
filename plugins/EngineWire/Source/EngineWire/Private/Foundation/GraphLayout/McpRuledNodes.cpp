@@ -1062,6 +1062,7 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     if (Params.bCollapseAutoExecKnots && !Params.bPreviewOnly)
     {
         McpGraphLayoutDiag::CollapseAutoExecKnots(Graph, &FreeSet);
+        McpGraphLayoutDiag::CollapseAutoDataKnots(Graph, &FreeSet);
         // Prune any collapsed auto-knot pointers from FreeSet.
         TSet<UEdGraphNode*> GraphNodeSet(Graph->Nodes);
         for (auto It = FreeSet.CreateIterator(); It; ++It)
@@ -1290,7 +1291,7 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
                 if (Link == Keep || !Problem.Free[ToNode]) { continue; }
                 const FVector2D Reader = Solution.Pos[ToNode];
                 const FVector2D Span = Reader - Solution.Pos[Source];
-                if (FMath::Abs(Span.X) < Params.MaxSharedGetSpan && FMath::Abs(Span.Y) < Params.RowGap * 3.0f) { continue; }
+                if (Span.Size() < Params.MaxSharedGetSpan && FMath::Abs(Span.Y) < Params.RowGap * 2.5f) { continue; }
                 int32 Group = INDEX_NONE;
                 for (int32 Candidate = 0; Candidate < GetterCopies.Num(); ++Candidate)
                 {
@@ -1369,7 +1370,7 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
                         if (Problem.Free[Wire.To])
                         {
                             const FVector2D Span = Solution.Pos[Wire.To] - Solution.Pos[Source];
-                            bAnyDistant |= FMath::Abs(Span.X) >= Params.MaxSharedGetSpan || FMath::Abs(Span.Y) >= Params.RowGap * 3.0f;
+                            bAnyDistant |= Span.Size() >= Params.MaxSharedGetSpan || FMath::Abs(Span.Y) >= Params.RowGap * 2.5f;
                         }
                     }
                     if (bHasByRefReader || !bAnyDistant || Readers.Num() == 0) { continue; }
@@ -1477,8 +1478,20 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
     }
     const auto RouteKey = [&](const FRowBreak& Break, bool bLast, const FVector2D& Centre)
     {
-        return FString::Printf(TEXT("%p:%p:%d:%d"), bLast ? nullptr : Wires[Break.Link].Key->GetOwningNode(),
-            Wires[Break.Link].Value, FMath::RoundToInt(Centre.X - 16.0), FMath::RoundToInt(Centre.Y - 12.0));
+        const int32 RX = FMath::RoundToInt(Centre.X - 16.0);
+        const int32 RY = FMath::RoundToInt(Centre.Y - 12.0);
+        if (bLast)
+        {
+            return FString::Printf(TEXT("end:%p:%d:%d"), Wires[Break.Link].Value, RX, RY);
+        }
+        const bool bExec = Wires[Break.Link].Key &&
+            Wires[Break.Link].Key->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec;
+        if (bExec)
+        {
+            return FString::Printf(TEXT("exec:%p:%p:%d:%d"),
+                Wires[Break.Link].Key->GetOwningNode(), Wires[Break.Link].Value, RX, RY);
+        }
+        return FString::Printf(TEXT("data:%p:%d:%d"), Wires[Break.Link].Key, RX, RY);
     };
     // Validate for every caller, including automatic batch/code placement whose API omits OutFailure.
     {
@@ -1530,7 +1543,10 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
                 {
                     if (Overlaps(KnotBox, Box))
                     {
-                        *OutFailure = TEXT("A planned reroute overlaps a node or another reroute.");
+                        *OutFailure = FString::Printf(
+                            TEXT("A planned reroute at (%.0f,%.0f..%.0f,%.0f) overlaps (%.0f,%.0f..%.0f,%.0f)."),
+                            KnotBox.Min.X, KnotBox.Min.Y, KnotBox.Max.X, KnotBox.Max.Y,
+                            Box.Min.X, Box.Min.Y, Box.Max.X, Box.Max.Y);
                         return NoneBottom;
                     }
                 }
@@ -1660,7 +1676,7 @@ float LayoutNodes(UEdGraph* Graph, const TArray<UEdGraphNode*>& Free, const FVec
         if (bNewEnd) { B = MakeKnot(*Graph, Break.B); RoutedPoints.Add(EndKey, B); }
         Source->BreakLinkTo(Target);
         Schema->TryCreateConnection(Source, A->GetInputPin());
-        if (bNewStart) { Schema->TryCreateConnection(A->GetOutputPin(), B->GetInputPin()); }
+        if (bNewStart || bNewEnd) { Schema->TryCreateConnection(A->GetOutputPin(), B->GetInputPin()); }
         if (bNewEnd) { Schema->TryCreateConnection(B->GetOutputPin(), Target); }
         if (OutAdded)
         {
